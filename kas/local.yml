@@ -1,0 +1,8 @@
+header:
+  version: 19
+
+# Default build host configuration.
+# These paths may be adapted to the local workstation.
+env:
+  DL_DIR: /opt/yocto/downloads
+  SSTATE_DIR: /opt/yocto/sstate-cache

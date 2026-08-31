@@ -1,0 +1,23 @@
+header:
+  version: 19
+
+distro: poky
+
+target:
+  - core-image-minimal
+
+local_conf_header:
+  demo-login: |
+    EXTRA_IMAGE_FEATURES += "allow-empty-password empty-root-password allow-root-login"
+
+repos:
+  poky:
+    path: src/poky
+    layers:
+      meta:
+      meta-poky:
+
+  meta-openembedded:
+    path: src/meta-openembedded
+    layers:
+      meta-oe:

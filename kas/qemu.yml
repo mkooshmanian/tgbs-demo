@@ -1,0 +1,9 @@
+header:
+  version: 19
+
+machine: qemuarm
+
+local_conf_header:
+  qemu-hardware: |
+    QB_SMP = "-smp 2"
+    QB_MEM = "-m 1024"
