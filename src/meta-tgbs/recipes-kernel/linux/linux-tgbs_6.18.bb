@@ -31,12 +31,18 @@ B = "${WORKDIR}/build"
 
 TGBS_PATCH_DIR = "${WORKDIR}/TGBS-patch-tgbs-v${TGBS_VERSION}-k${LINUX_VERSION}/patches"
 
-# qemuarm is a 32-bit ARMv7 Cortex-A15 machine using QEMU's "virt" board.
-# multi_v7_defconfig provides the required ARCH_VIRT, PL011 and VirtIO support.
-KBUILD_DEFCONFIG:qemuarm = "multi_v7_defconfig"
-COMPATIBLE_MACHINE = "^qemuarm$"
+# Start from allnoconfig and add only the selected machine's hardware.
+TGBS_MACHINE_CONFIG:qemuarm32 = "qemuarm32.cfg"
+TGBS_MACHINE_CONFIG:zybo-z7 = "zybo-z7.cfg"
 
-KERNEL_CONFIG_FRAGMENTS = "${WORKDIR}/tgbs.cfg"
+SRC_URI += "file://${TGBS_MACHINE_CONFIG}"
+
+COMPATIBLE_MACHINE = "^(qemuarm32|zybo-z7)$"
+
+KERNEL_CONFIG_FRAGMENTS = " \
+    ${WORKDIR}/${TGBS_MACHINE_CONFIG} \
+    ${WORKDIR}/tgbs.cfg \
+"
 KERNEL_CONFIG_FRAGMENTS:append = "${@bb.utils.contains('DISTRO_FEATURES', \
     'preempt-rt', ' ${WORKDIR}/preempt-rt.cfg', '', d)}"
 
@@ -52,7 +58,7 @@ do_apply_tgbs_patches() {
 addtask apply_tgbs_patches after do_patch before do_configure
 
 do_configure:prepend() {
-    oe_runmake -C ${S} O=${B} ${KBUILD_DEFCONFIG}
+    oe_runmake -C ${S} O=${B} allnoconfig
     ${S}/scripts/kconfig/merge_config.sh -m -O ${B} \
         ${B}/.config ${KERNEL_CONFIG_FRAGMENTS}
 }

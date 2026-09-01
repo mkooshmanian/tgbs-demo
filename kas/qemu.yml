@@ -1,7 +1,7 @@
 header:
   version: 19
 
-machine: qemuarm
+machine: qemuarm32
 
 local_conf_header:
   qemu-hardware: |
