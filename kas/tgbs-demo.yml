@@ -13,6 +13,8 @@ local_conf_header:
     PREFERRED_PROVIDER_virtual/kernel = "linux-tgbs"
   preempt-rt: |
     DISTRO_FEATURES:append = " preempt-rt"
+  kernel-debug: |
+    DISTRO_FEATURES:append = " kdebug"
 
 repos:
   poky:
@@ -20,11 +22,11 @@ repos:
     layers:
       meta:
       meta-poky:
-
   meta-openembedded:
     path: src/meta-openembedded
     layers:
       meta-oe:
-
   meta-tgbs:
     path: src/meta-tgbs
+  meta-kdebug:
+    path: src/meta-kdebug

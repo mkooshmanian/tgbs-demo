@@ -1,0 +1,44 @@
+meta-kdebug
+==========
+
+Optional Yocto layer for enabling kernel debugging support.
+
+Enabling the layer
+------------------
+
+Add the layer to `build/conf/bblayers.conf`:
+
+```
+/workdir/meta-kdebug
+```
+
+Then add the `kdebug` distribution feature to `build/conf/local.conf`:
+
+```
+DISTRO_FEATURES:append = " kdebug"
+```
+
+Effect
+------
+
+When `kdebug` is present in the distribution features, the layer applies a
+configuration fragment to the recipe that provides `virtual/kernel`:
+
+```
+CONFIG_DEBUG_INFO=y
+CONFIG_DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT=y
+CONFIG_GDB_SCRIPTS=y
+```
+
+If `CONFIG_GDB_SCRIPTS=y` is enabled in the final kernel configuration, the
+build also generates the kernel GDB scripts in the kernel build directory:
+
+```
+vmlinux-gdb.py
+scripts/gdb/linux/*.py
+```
+
+The layer uses a globally inherited class and therefore does not depend on the
+name of the kernel recipe.
+
+Without the `kdebug` feature, the layer does not modify the kernel `SRC_URI`.
