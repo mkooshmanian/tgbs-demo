@@ -9,7 +9,7 @@ Currently supported:
 * QEMU ARM (`qemuarm32`)
 * Digilent Zybo Z7 / Zynq-7000 (`zybo-z7`)
 
-The QEMU configuration uses a 32-bit ARM (ARMv7) target with 2 virtual CPUs and 1 GiB of RAM to approximate the main hardware characteristics of the Zynq-7000 SoC used on the Zybo Z7.
+The QEMU configuration matches the Zynq-7000 SoC: an ARMv7 (Cortex-A9) target with 2 virtual CPUs and 1 GiB of RAM, sharing the same CPU tune as the Zybo Z7 so both machines build with a single toolchain.
 
 ## Project Structure
 
