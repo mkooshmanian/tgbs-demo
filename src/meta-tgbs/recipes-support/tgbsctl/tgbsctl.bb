@@ -7,6 +7,8 @@ SRC_URI = "file://tgbsctl.c file://tgbsctl.h file://observe.c file://control.c"
 
 S = "${WORKDIR}"
 
+RDEPENDS:${PN} += "tgbs-runtime-init"
+
 CFLAGS:append = " -Wall -Wextra"
 
 do_compile() {
