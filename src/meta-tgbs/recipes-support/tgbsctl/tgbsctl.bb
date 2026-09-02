@@ -3,14 +3,14 @@ DESCRIPTION = "tgbsctl creates a cgroup directly under /sys/fs/cgroup, configure
 LICENSE = "MIT"
 LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda2f7b4f302"
 
-SRC_URI = "file://tgbsctl.c"
+SRC_URI = "file://tgbsctl.c file://tgbsctl.h file://observe.c"
 
 S = "${WORKDIR}"
 
 CFLAGS:append = " -Wall -Wextra"
 
 do_compile() {
-	${CC} ${CFLAGS} ${LDFLAGS} tgbsctl.c -o tgbsctl
+	${CC} ${CFLAGS} ${LDFLAGS} tgbsctl.c observe.c -o tgbsctl
 }
 
 do_install() {

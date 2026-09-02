@@ -1,12 +1,17 @@
 /*
  * SPDX-License-Identifier: MIT
  *
- * tgbsctl - minimal daemonless TGBS runtime launcher
+ * tgbsctl - minimal daemonless TGBS runtime and inspection tool
  *
- * Run a command inside a TGBS cgroup created directly under /sys/fs/cgroup.
+ * The "run" command creates a TGBS cgroup directly under /sys/fs/cgroup,
+ * configures its temporal contract, and starts a command inside it. A volatile
+ * marker under /run/tgbs records the main process identity so that "list" and
+ * "inspect" can correlate userspace processes with their TGBS cgroup.
  *
- * The cgroup lifetime is tied to the main process: when it exits, any remaining
- * tasks inside the cgroup are terminated before the cgroup is removed.
+ * The cgroup lifetime is tied to the main process. When it exits, tgbsctl
+ * terminates any remaining tasks, then removes the cgroup and its marker.
+ * Observation is read-only and derives the current state from cgroupfs, /proc,
+ * and the marker; no daemon or persistent state database is involved.
  */
 
 #define _GNU_SOURCE
@@ -25,20 +30,27 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 
-#define CG_ROOT "/sys/fs/cgroup"
+#include "tgbsctl.h"
 
-static void usage(const char *prog)
+void usage(const char *prog)
 {
 	fprintf(stderr,
-		"Usage: %s run --name NAME --runtime-us RUNTIME --period-us PERIOD COMMAND [ARGS...]\n"
+		"Usage:\n"
+		"  %s run --name NAME --runtime-us RUNTIME --period-us PERIOD COMMAND [ARGS...]\n"
+		"  %s list\n"
+		"  %s inspect NAME\n"
 		"\n"
-		"Options must precede the subcommand 'run'.\n"
-		"Run COMMAND inside a TGBS cgroup named NAME created under %s.\n"
-		"Runtime and period are in microseconds with 0 < runtime <= period.\n",
-		prog, CG_ROOT);
+		"Commands:\n"
+		"  run      Run COMMAND in a TGBS cgroup named NAME under %s.\n"
+		"           Run options must follow 'run' and precede COMMAND.\n"
+		"           RUNTIME and PERIOD are in microseconds and must satisfy\n"
+		"           0 < RUNTIME <= PERIOD.\n"
+		"  list     List the TGBS domains known to this runtime.\n"
+		"  inspect  Show the state, temporal contract, and processes for NAME.\n",
+		prog, prog, prog, CG_ROOT);
 }
 
-static int is_valid_name(const char *name)
+int is_valid_name(const char *name)
 {
 	size_t i;
 
@@ -53,7 +65,7 @@ static int is_valid_name(const char *name)
 }
 
 /* Parse a strictly positive unsigned long long, rejecting trailing junk. */
-static int parse_positive(const char *text, unsigned long long *out)
+int parse_positive(const char *text, unsigned long long *out)
 {
 	char *end;
 	errno = 0;
@@ -66,7 +78,7 @@ static int parse_positive(const char *text, unsigned long long *out)
 	return 0;
 }
 
-static int write_u64(const char *path, unsigned long long value)
+int write_u64(const char *path, unsigned long long value)
 {
 	char buf[32];
 	int len;
@@ -89,9 +101,68 @@ static int write_u64(const char *path, unsigned long long value)
 	return 0;
 }
 
+/* Read the starttime (field 22, kernel ticks since boot) from
+ * /proc/<pid>/stat. The comm field (field 2) may contain spaces and
+ * parentheses, so we split on the last ')' instead of the first. */
+int read_starttime(pid_t pid, unsigned long long *out)
+{
+	char path[PATH_MAX];
+	char buf[512];
+	int fd;
+	ssize_t r;
+	char *after;
+	unsigned long long value;
+
+	snprintf(path, sizeof(path), "/proc/%d/stat", (int) pid);
+	fd = open(path, O_RDONLY);
+	if (fd < 0)
+		return -1;
+
+	r = read(fd, buf, sizeof(buf) - 1);
+	close(fd);
+	if (r <= 0)
+		return -1;
+	buf[r] = '\0';
+
+	/* comm is the 2nd field and is enclosed in parentheses; it may itself
+	 * contain spaces or ')', so the last ')' is the true delimiter. */
+	after = strrchr(buf, ')');
+	if (after == NULL)
+		return -1;
+	after++;
+
+	/* after points at field 3 (state). starttime is field 22 overall, so it
+	 * is the 20th token after the state. Skip the state (a single char) and
+	 * the 18 numeric fields 4..21 that precede it, then read starttime. Fields
+	 * 3..21 are skipped without conversion to tolerate the signed ones. */
+	char *p = after;
+	char *end = NULL;
+	int field = 3;
+	while (field < 22) {
+		while (*p == ' ' || *p == '\t')
+			p++;
+		if (*p == '\0')
+			return -1;
+		while (*p != '\0' && *p != ' ' && *p != '\t')
+			p++;
+		field++;
+	}
+	while (*p == ' ' || *p == '\t')
+		p++;
+	errno = 0;
+	value = strtoull(p, &end, 10);
+	if (end == p || errno != 0)
+		return -1;
+
+	if (value == 0)
+		return -1;
+	*out = value;
+	return 0;
+}
+
 /* Read back a cgroup file and confirm the value matches, so a silent kernel
  * write cannot leave a cgroup configured with a stale value. */
-static int read_u64(const char *path, unsigned long long *out)
+int read_u64(const char *path, unsigned long long *out)
 {
 	char buf[32];
 	int fd;
@@ -115,7 +186,7 @@ static int read_u64(const char *path, unsigned long long *out)
 	return 0;
 }
 
-static void error_exit(const char *fmt, ...)
+void error_exit(const char *fmt, ...)
 {
 	va_list ap;
 	fprintf(stderr, "tgbsctl: ERROR - ");
@@ -127,7 +198,7 @@ static void error_exit(const char *fmt, ...)
 }
 
 /* cgroup v2 must be mounted as type cgroup2 on /sys/fs/cgroup. */
-static void verify_cgroup_env(void)
+void verify_cgroup_env(void)
 {
 	FILE *f;
 	char source[64], target[64], type[64];
@@ -231,7 +302,50 @@ static void cleanup_cgroup(const char *name)
 		name, strerror(errno));
 }
 
-int main(int argc, char **argv)
+/* Remove the runtime ownership marker once the cgroup is gone. Also remove a
+ * temporary marker left by a failed write/rename before removing the directory. */
+static void cleanup_metadata(const char *name)
+{
+	char meta_path[PATH_MAX];
+	char main_pid_path[PATH_MAX + 32];
+	char tmp_path[PATH_MAX + 32];
+
+	snprintf(meta_path, sizeof(meta_path), "%s/%s", RUN_ROOT, name);
+	snprintf(main_pid_path, sizeof(main_pid_path), "%s/main.pid", meta_path);
+	snprintf(tmp_path, sizeof(tmp_path), "%s/main.pid.tmp", meta_path);
+	unlink(main_pid_path);
+	unlink(tmp_path);
+	if (rmdir(meta_path) != 0 && errno != ENOENT)
+		fprintf(stderr, "tgbsctl: ERROR - unable to remove metadata for %s: %s\n",
+			name, strerror(errno));
+}
+
+/* Write "PID STARTTIME" atomically: temp file then rename. */
+static int write_meta(const char *tmp, pid_t pid, unsigned long long starttime)
+{
+	char buf[64];
+	int len;
+	int fd;
+	ssize_t r;
+
+	len = snprintf(buf, sizeof(buf), "%d %llu", (int) pid,
+		(unsigned long long) starttime);
+	if (len < 0 || len >= (int) sizeof(buf))
+		return -1;
+
+	fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+	if (fd < 0)
+		return -1;
+
+	r = write(fd, buf, (size_t) len);
+	close(fd);
+
+	if (r != (ssize_t) len)
+		return -1;
+	return 0;
+}
+
+int cmd_run(int argc, char **argv)
 {
 	const char *name = NULL;
 	unsigned long long runtime_us = 0;
@@ -239,7 +353,11 @@ int main(int argc, char **argv)
 	int opt;
 	int cmd_index = 0;
 	char name_path[288];
+	char meta_path[384];
+	char main_pid_path[384];
+	char tmp_path[PATH_MAX];
 	pid_t pid;
+	unsigned long long starttime = 0;
 	int status;
 	struct sigaction sa;
 
@@ -308,6 +426,11 @@ int main(int argc, char **argv)
 	if (mkdir(name_path, 0755) != 0 && errno != EEXIST)
 		error_exit("unable to create cgroup %s: %s", name_path, strerror(errno));
 
+	snprintf(meta_path, sizeof(meta_path), "%s/%s", RUN_ROOT, name);
+	if (mkdir(meta_path, 0755) != 0 && errno != EEXIST)
+		error_exit("unable to create metadata for %s: %s", name_path, strerror(errno));
+	snprintf(main_pid_path, sizeof(main_pid_path), "%s/main.pid", meta_path);
+
 	/* Configure the temporal contract before any task enters the cgroup. */
 	char cfg_path[PATH_MAX];
 	snprintf(cfg_path, sizeof(cfg_path), "%s/cpu.period_us", name_path);
@@ -361,6 +484,25 @@ int main(int argc, char **argv)
 	/* Resume: the child now execs inside the TGBS cgroup. */
 	kill(pid, SIGCONT);
 
+	/* Record the main process identity (pid + /proc starttime) so that
+	 * list/inspect can verify it is really the same process after PID reuse. */
+	if (read_starttime(pid, &starttime) != 0) {
+		cleanup_cgroup(name);
+		cleanup_metadata(name);
+		error_exit("unable to read starttime for %d", pid);
+	}
+	snprintf(tmp_path, sizeof(tmp_path), "%s/main.pid.tmp", meta_path);
+	if (write_meta(tmp_path, pid, starttime) != 0) {
+		cleanup_cgroup(name);
+		cleanup_metadata(name);
+		error_exit("unable to write metadata for %s", name);
+	}
+	if (rename(tmp_path, main_pid_path) != 0) {
+		cleanup_cgroup(name);
+		cleanup_metadata(name);
+		error_exit("unable to finalize metadata for %s", name);
+	}
+
 	if (waitpid(pid, &status, 0) < 0) {
 		cleanup_cgroup(name);
 		error_exit("waitpid failed: %s", strerror(errno));
@@ -379,15 +521,42 @@ int main(int argc, char **argv)
 		int rc = WEXITSTATUS(status);
 		printf("tgbsctl: command exited with code %d\n", rc);
 		cleanup_cgroup(name);
+		cleanup_metadata(name);
 		return rc;
 	}
 	if (WIFSIGNALED(status)) {
 		int sig = WTERMSIG(status);
 		printf("tgbsctl: command killed by signal %d\n", sig);
 		cleanup_cgroup(name);
+		cleanup_metadata(name);
 		return 128 + sig;
 	}
 
 	cleanup_cgroup(name);
+	cleanup_metadata(name);
 	return 1;
+}
+
+int main(int argc, char **argv)
+{
+	if (argc < 2) {
+		usage(argv[0]);
+		return 2;
+	}
+
+	if (strcmp(argv[1], "run") == 0)
+		return cmd_run(argc, argv);
+	if (strcmp(argv[1], "list") == 0)
+		return cmd_list();
+	if (strcmp(argv[1], "inspect") == 0) {
+		if (argc < 3) {
+			fprintf(stderr, "tgbsctl: ERROR - inspect requires a NAME\n");
+			usage(argv[0]);
+			return 2;
+		}
+		return cmd_inspect(argv[2]);
+	}
+
+	usage(argv[0]);
+	return 2;
 }

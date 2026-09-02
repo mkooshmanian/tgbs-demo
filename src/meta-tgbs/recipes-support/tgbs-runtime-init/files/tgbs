@@ -16,6 +16,7 @@
 ### END INIT INFO
 
 CG_ROOT=/sys/fs/cgroup
+RUN_ROOT=/run/tgbs
 
 # /proc and /sys are provided by sysfs.sh (S02). A missing /proc/mounts means
 # the boot environment is not ready.
@@ -25,6 +26,7 @@ if [ ! -r /proc/mounts ]; then
 fi
 
 mkdir -p "$CG_ROOT"
+mkdir -p "$RUN_ROOT"
 
 # Three cases for /sys/fs/cgroup:
 #  - nothing mounted there: mount cgroup2;
