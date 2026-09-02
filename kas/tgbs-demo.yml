@@ -16,7 +16,7 @@ local_conf_header:
   kernel-debug: |
     DISTRO_FEATURES:append = " kdebug"
   tgbs-runtime: |
-    IMAGE_INSTALL:append = " tgbs-runtime-init"
+    IMAGE_INSTALL:append = " tgbs-runtime-init tgbsctl"
 
 repos:
   poky:
