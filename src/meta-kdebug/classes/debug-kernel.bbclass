@@ -1,3 +1,7 @@
+KDEBUG_QEMU_ARGS ?= "-s"
+
+QB_OPT_APPEND:append = "${@bb.utils.contains('DISTRO_FEATURES', 'kdebug', ' ${KDEBUG_QEMU_ARGS}', '', d)}"
+
 python __anonymous () {
     if not bb.utils.contains('DISTRO_FEATURES', 'kdebug', True, False, d):
         return

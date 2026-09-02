@@ -1,0 +1,43 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Attach QEMU",
+            "cwd": "${workspaceRoot}",
+            "executable": "${workspaceFolder}/build/tmp/work/qemuarm32-poky-linux-gnueabi/linux-tgbs/6.18+tgbs1.4/build/vmlinux",
+            "request": "attach",
+            "type": "cortex-debug",
+            "gdbPath": "gdb-multiarch",
+            "servertype": "external",
+            "gdbTarget": ":1234",
+            "preAttachCommands": [
+                "set substitute-path /usr/src/kernel ${workspaceFolder}/build/tmp/work-shared/zybo-z7/kernel-source"
+            ],
+            "postAttachCommands": [
+                "source ${workspaceFolder}/build/tmp/work/zybo_z7-poky-linux-gnueabi/linux-tgbs/6.18+tgbs1.4/build/vmlinux-gdb.py"
+            ],
+            "showDevDebugOutput": "none"
+        },
+        {
+            "name": "Attach Zynq",
+            "cwd": "${workspaceRoot}",
+            "executable": "${workspaceFolder}/build/tmp/work/zybo_z7-poky-linux-gnueabi/linux-tgbs/6.18+tgbs1.4/build/vmlinux",
+            "request": "attach",
+            "type": "cortex-debug",
+            "gdbPath": "gdb-multiarch",
+            "servertype": "openocd",
+            "configFiles": [
+                "interface/ftdi/digilent-hs1.cfg",
+                "target/zynq_7000.cfg"
+            ],
+            "preAttachCommands": [
+                "monitor gdb_breakpoint_override hard",
+                "set substitute-path /usr/src/kernel ${workspaceFolder}/build/tmp/work-shared/zybo-z7/kernel-source"
+            ],
+            "postAttachCommands": [
+                "source ${workspaceFolder}/build/tmp/work/zybo_z7-poky-linux-gnueabi/linux-tgbs/6.18+tgbs1.4/build/vmlinux-gdb.py"
+            ],
+            "showDevDebugOutput": "none"
+        }
+    ]
+}
