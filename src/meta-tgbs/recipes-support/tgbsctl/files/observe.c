@@ -40,39 +40,31 @@ static int read_u64_file(const char *path, unsigned long long *out)
 	return 0;
 }
 
-static int read_populated(const char *name, int *out)
+static int read_cgroup_event(const char *name, const char *key, int *out)
 {
 	char path[PATH_MAX];
-	char buf[64];
-	int fd;
-	ssize_t r;
+	char line[128];
+	FILE *f;
 
 	snprintf(path, sizeof(path), "%s/%s/cgroup.events", CG_ROOT, name);
-	fd = open(path, O_RDONLY);
-	if (fd < 0)
+	f = fopen(path, "r");
+	if (f == NULL)
 		return -1;
-	r = read(fd, buf, sizeof(buf) - 1);
-	close(fd);
-	if (r <= 0)
-		return -1;
-	buf[r] = '\0';
 
-	/* cgroup.events is "key value\n" lines. Walk each newline-terminated
-	 * field, advancing past the delimiter once it has been null-terminated. */
-	char *start = buf;
-	for (char *nl = buf; (nl = strpbrk(nl, "\n")) != NULL; nl++) {
-		*nl = '\0';
-		if (strncmp(start, "populated", 9) == 0) {
-			long v = strtol(start + 9, NULL, 10);
-			if (v < 0)
-				v = 0;
-			*out = v;
+	while (fgets(line, sizeof(line), f) != NULL) {
+		char event[64];
+		int value;
+
+		if (sscanf(line, "%63s %d", event, &value) == 2 &&
+		    strcmp(event, key) == 0) {
+			fclose(f);
+			*out = value;
 			return 0;
 		}
-		start = nl + 1;
 	}
-	*out = 0;
-	return 0;
+	fclose(f);
+	errno = ENOENT;
+	return -1;
 }
 
 static int read_procs(const char *name, char *out, size_t outsz)
@@ -235,7 +227,7 @@ static int main_is_alive(const char *name, pid_t pid, unsigned long long startti
 		return 0;
 
 	int populated = -1;
-	read_populated(name, &populated);
+	read_cgroup_event(name, "populated", &populated);
 	return populated == 1;
 }
 
@@ -248,10 +240,13 @@ static enum domain_state domain_state(const char *name, pid_t pid,
 		return STATE_STALE;
 
 	int populated = 0;
-	read_populated(name, &populated);
+	read_cgroup_event(name, "populated", &populated);
 
-	if (main_is_alive(name, pid, starttime))
-		return STATE_RUNNING;
+	if (main_is_alive(name, pid, starttime)) {
+		int frozen = 0;
+		read_cgroup_event(name, "frozen", &frozen);
+		return frozen ? STATE_PAUSED : STATE_RUNNING;
+	}
 	return populated ? STATE_ORPHAN : STATE_EXITED;
 }
 
@@ -261,6 +256,7 @@ const char *state_name(enum domain_state s)
 	case STATE_UNKNOWN: return "unknown";
 	case STATE_INITIALIZING: return "initializing";
 	case STATE_RUNNING: return "running";
+	case STATE_PAUSED: return "paused";
 	case STATE_ORPHAN: return "orphan";
 	case STATE_EXITED: return "exited";
 	case STATE_STALE: return "stale";

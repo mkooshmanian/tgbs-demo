@@ -11,7 +11,8 @@
  * The cgroup lifetime is tied to the main process. When it exits, tgbsctl
  * terminates any remaining tasks, then removes the cgroup and its marker.
  * Observation is read-only and derives the current state from cgroupfs, /proc,
- * and the marker; no daemon or persistent state database is involved.
+ * and the marker. Control commands act directly on cgroupfs; no daemon or
+ * persistent state database is involved.
  */
 
 #define _GNU_SOURCE
@@ -39,6 +40,11 @@ void usage(const char *prog)
 		"  %s run --name NAME --runtime-us RUNTIME --period-us PERIOD COMMAND [ARGS...]\n"
 		"  %s list\n"
 		"  %s inspect NAME\n"
+		"  %s kill NAME\n"
+		"  %s pause NAME\n"
+		"  %s resume NAME\n"
+		"  %s set NAME runtime VALUE_US\n"
+		"  %s set NAME period VALUE_US\n"
 		"\n"
 		"Commands:\n"
 		"  run      Run COMMAND in a TGBS cgroup named NAME under %s.\n"
@@ -46,8 +52,12 @@ void usage(const char *prog)
 		"           RUNTIME and PERIOD are in microseconds and must satisfy\n"
 		"           0 < RUNTIME <= PERIOD.\n"
 		"  list     List the TGBS domains known to this runtime.\n"
-		"  inspect  Show the state, temporal contract, and processes for NAME.\n",
-		prog, prog, prog, CG_ROOT);
+		"  inspect  Show the state, temporal contract, and processes for NAME.\n"
+		"  kill     Kill every process in NAME. The run supervisor then cleans up.\n"
+		"  pause    Freeze every process in NAME.\n"
+		"  resume   Unfreeze every process in NAME.\n"
+		"  set      Change one value of NAME's temporal contract.\n",
+		prog, prog, prog, prog, prog, prog, prog, prog, CG_ROOT);
 }
 
 int is_valid_name(const char *name)
@@ -246,36 +256,36 @@ static void signal_handler(int sig)
 }
 
 /* Terminate every remaining task inside the cgroup. */
-static void cgroup_kill(const char *name)
+int cgroup_kill(const char *name)
 {
 	char path[PATH_MAX];
 	snprintf(path, sizeof(path), "%s/%s/cgroup.kill", CG_ROOT, name);
 	if (write_u64(path, 1) == 0)
-		return;
+		return 0;
 
 	/* Either the kernel does not support cgroup.kill, or it returned an
 	 * error (e.g. empty cgroup). Fall back to killing the remaining pids. */
-	int fd;
 	char procs_path[PATH_MAX];
 	snprintf(procs_path, sizeof(procs_path), "%s/%s/cgroup.procs", CG_ROOT, name);
-	fd = open(procs_path, O_RDWR);
-	if (fd < 0)
-		return;
-	while (1) {
-		char pidbuf[32];
-		ssize_t r = read(fd, pidbuf, sizeof(pidbuf) - 1);
-		if (r <= 0)
-			break;
-		pidbuf[r] = '\0';
-		for (char *p = pidbuf; *p != '\0'; p++) {
-			if (isdigit((unsigned char) *p)) {
-				pid_t pid = (pid_t) strtoul(p, &p, 10);
-				if (pid > 0)
-					kill(pid, SIGKILL);
-			}
+	FILE *f = fopen(procs_path, "r");
+	if (f == NULL)
+		return -1;
+
+	int failed = 0;
+	int saved_errno = 0;
+	int raw_pid;
+	while (fscanf(f, "%d", &raw_pid) == 1) {
+		if (raw_pid > 0 && kill((pid_t) raw_pid, SIGKILL) != 0 && errno != ESRCH) {
+			failed = 1;
+			saved_errno = errno;
 		}
 	}
-	close(fd);
+	fclose(f);
+	if (failed) {
+		errno = saved_errno;
+		return -1;
+	}
+	return 0;
 }
 
 /* Borned cleanup: try rmdir, then kill remaining tasks, then retry. */
@@ -555,6 +565,30 @@ int main(int argc, char **argv)
 			return 2;
 		}
 		return cmd_inspect(argv[2]);
+	}
+	if (strcmp(argv[1], "kill") == 0) {
+		if (argc != 3) {
+			fprintf(stderr, "tgbsctl: ERROR - kill requires exactly one NAME\n");
+			usage(argv[0]);
+			return 2;
+		}
+		return cmd_kill(argv[2]);
+	}
+	if (strcmp(argv[1], "pause") == 0 || strcmp(argv[1], "resume") == 0) {
+		if (argc != 3) {
+			fprintf(stderr, "tgbsctl: ERROR - %s requires exactly one NAME\n", argv[1]);
+			usage(argv[0]);
+			return 2;
+		}
+		return cmd_freeze(argv[2], strcmp(argv[1], "pause") == 0);
+	}
+	if (strcmp(argv[1], "set") == 0) {
+		if (argc != 5) {
+			fprintf(stderr, "tgbsctl: ERROR - set requires NAME, runtime|period, and VALUE_US\n");
+			usage(argv[0]);
+			return 2;
+		}
+		return cmd_set(argv[2], argv[3], argv[4]);
 	}
 
 	usage(argv[0]);
