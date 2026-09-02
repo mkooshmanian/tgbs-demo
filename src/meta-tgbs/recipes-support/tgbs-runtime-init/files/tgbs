@@ -1,0 +1,67 @@
+#!/bin/sh
+#
+# SPDX-License-Identifier: MIT
+#
+
+### BEGIN INIT INFO
+# Provides:          tgbs-cgroup2
+# Required-Start:    mountvirtfs $local_fs
+# Required-Stop:     $local_fs
+# Default-Start:     S
+# Default-Stop:      0 6
+# Short-Description: Mount cgroup v2 and enable the cpu controller for TGBS.
+# Description:       Prepare the cgroup v2 hierarchy at /sys/fs/cgroup so that
+#                    TGBS can create task groups under the root. Does not create
+#                    any subgroup and does not modify any budget or period.
+### END INIT INFO
+
+CG_ROOT=/sys/fs/cgroup
+
+# /proc and /sys are provided by sysfs.sh (S02). A missing /proc/mounts means
+# the boot environment is not ready.
+if [ ! -r /proc/mounts ]; then
+	echo "tgbs: ERROR - /proc/mounts is missing, boot environment is incomplete" >&2
+	exit 1
+fi
+
+mkdir -p "$CG_ROOT"
+
+# Three cases for /sys/fs/cgroup:
+#  - nothing mounted there: mount cgroup2;
+#  - already mounted as cgroup2: continue;
+#  - mounted with any other type: fail, never mount cgroup2 on top.
+if mountpoint -q "$CG_ROOT"; then
+	if ! awk '$2=="/sys/fs/cgroup" && $3=="cgroup2"{found=1} END{exit !found}' /proc/mounts; then
+		echo "tgbs: ERROR - $CG_ROOT is already mounted with a non-cgroup2 filesystem; refusing to mount cgroup2 on top" >&2
+		exit 1
+	fi
+else
+	mount -t cgroup2 cgroup2 "$CG_ROOT"
+	if [ $? -ne 0 ]; then
+		echo "tgbs: ERROR - unable to mount cgroup2 on $CG_ROOT" >&2
+		exit 1
+	fi
+fi
+
+# The unified hierarchy must expose cgroup.controllers.
+if [ ! -r "$CG_ROOT/cgroup.controllers" ]; then
+	echo "tgbs: ERROR - $CG_ROOT/cgroup.controllers is missing, the unified hierarchy is unavailable" >&2
+	exit 1
+fi
+
+# The cpu controller must be available.
+if ! grep -w -q cpu "$CG_ROOT/cgroup.controllers"; then
+	echo "tgbs: ERROR - the cpu controller is not available in $CG_ROOT/cgroup.controllers" >&2
+	exit 1
+fi
+
+# Enable +cpu in subtree_control when it is not already enabled.
+if ! grep -w -q cpu "$CG_ROOT/cgroup.subtree_control" 2>/dev/null; then
+	if ! echo '+cpu' > "$CG_ROOT/cgroup.subtree_control"; then
+		echo "tgbs: ERROR - unable to enable +cpu in $CG_ROOT/cgroup.subtree_control" >&2
+		exit 1
+	fi
+fi
+
+echo "tgbs: cgroup v2 is ready at $CG_ROOT, cpu controller enabled at the root"
+exit 0
