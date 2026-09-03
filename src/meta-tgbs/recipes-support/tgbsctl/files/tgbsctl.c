@@ -37,7 +37,8 @@ void usage(const char *prog)
 {
 	fprintf(stderr,
 		"Usage:\n"
-		"  %s run --name NAME --runtime-us RUNTIME --period-us PERIOD COMMAND [ARGS...]\n"
+		"  %s run --name NAME --runtime-us RUNTIME --period-us PERIOD\n"
+		"         [--cpus CPU-LIST|inherit] [--reclaim BOOL] COMMAND [ARGS...]\n"
 		"  %s list\n"
 		"  %s inspect NAME\n"
 		"  %s kill NAME\n"
@@ -45,19 +46,24 @@ void usage(const char *prog)
 		"  %s resume NAME\n"
 		"  %s set NAME runtime VALUE_US\n"
 		"  %s set NAME period VALUE_US\n"
+		"  %s set NAME cpus CPU-LIST|inherit\n"
+		"  %s set NAME reclaim 0|1|false|true\n"
 		"\n"
 		"Commands:\n"
 		"  run      Run COMMAND in a TGBS cgroup named NAME under %s.\n"
 		"           Run options must follow 'run' and precede COMMAND.\n"
 		"           RUNTIME and PERIOD are in microseconds and must satisfy\n"
 		"           0 < RUNTIME <= PERIOD.\n"
+		"           CPU-LIST uses the cpuset list syntax, for example 0-1 or 0,2;\n"
+		"           inherit selects the cgroup root's effective CPU list.\n"
+		"           BOOL accepts 0, 1, false, or true.\n"
 		"  list     List the TGBS domains known to this runtime.\n"
 		"  inspect  Show the state, temporal contract, and processes for NAME.\n"
 		"  kill     Kill every process in NAME. The run supervisor then cleans up.\n"
 		"  pause    Freeze every process in NAME.\n"
 		"  resume   Unfreeze every process in NAME.\n"
 		"  set      Change one value of NAME's temporal contract.\n",
-		prog, prog, prog, prog, prog, prog, prog, prog, CG_ROOT);
+		prog, prog, prog, prog, prog, prog, prog, prog, prog, prog, CG_ROOT);
 }
 
 int is_valid_name(const char *name)
@@ -86,6 +92,19 @@ int parse_positive(const char *text, unsigned long long *out)
 		return -1;
 	*out = value;
 	return 0;
+}
+
+int parse_bool(const char *text, int *out)
+{
+	if (strcmp(text, "1") == 0 || strcasecmp(text, "true") == 0) {
+		*out = 1;
+		return 0;
+	}
+	if (strcmp(text, "0") == 0 || strcasecmp(text, "false") == 0) {
+		*out = 0;
+		return 0;
+	}
+	return -1;
 }
 
 int write_u64(const char *path, unsigned long long value)
@@ -175,6 +194,7 @@ int read_starttime(pid_t pid, unsigned long long *out)
 int read_u64(const char *path, unsigned long long *out)
 {
 	char buf[32];
+	char *end;
 	int fd;
 	ssize_t r;
 
@@ -189,10 +209,140 @@ int read_u64(const char *path, unsigned long long *out)
 	buf[r] = '\0';
 
 	errno = 0;
-	unsigned long long value = strtoull(buf, NULL, 10);
-	if (errno != 0 || value == 0)
+	unsigned long long value = strtoull(buf, &end, 10);
+	if (errno != 0 || end == buf)
 		return -1;
+	while (*end == ' ' || *end == '\t' || *end == '\r' || *end == '\n')
+		end++;
+	if (*end != '\0') {
+		errno = EINVAL;
+		return -1;
+	}
 	*out = value;
+	return 0;
+}
+
+int write_text(const char *path, const char *value)
+{
+	const char newline = '\n';
+	const char *data = value;
+	size_t len = strlen(value);
+	int fd;
+	ssize_t r;
+
+	/* A zero-length write is a no-op. cgroupfs uses a blank line to clear a
+	 * cpuset request and restore inheritance from the parent. */
+	if (len == 0) {
+		data = &newline;
+		len = 1;
+	}
+
+	fd = open(path, O_WRONLY);
+	if (fd < 0)
+		return -1;
+	do {
+		r = write(fd, data, len);
+	} while (r < 0 && errno == EINTR);
+	if (r != (ssize_t)len) {
+		int saved_errno = r < 0 ? errno : EIO;
+		close(fd);
+		errno = saved_errno;
+		return -1;
+	}
+	close(fd);
+	return 0;
+}
+
+int read_text(const char *path, char *out, size_t outsz)
+{
+	int fd;
+	ssize_t r;
+
+	if (outsz < 2) {
+		errno = EINVAL;
+		return -1;
+	}
+
+	fd = open(path, O_RDONLY);
+	if (fd < 0)
+		return -1;
+	do {
+		r = read(fd, out, outsz - 1);
+	} while (r < 0 && errno == EINTR);
+	close(fd);
+	if (r < 0)
+		return -1;
+	out[r] = '\0';
+
+	while (r > 0 && (out[r - 1] == '\n' || out[r - 1] == '\r' ||
+			  out[r - 1] == ' ' || out[r - 1] == '\t'))
+		out[--r] = '\0';
+	return 0;
+}
+
+int configure_domain_cpus(const char *name, const char *cpu_list)
+{
+	char path[PATH_MAX];
+	char effective[CPU_LIST_SIZE];
+	char inherited[CPU_LIST_SIZE];
+	char previous[CPU_LIST_SIZE];
+	const char *requested;
+	int saved_errno;
+
+	if (cpu_list == NULL || cpu_list[0] == '\0') {
+		errno = EINVAL;
+		return -1;
+	}
+	requested = cpu_list;
+	if (strcmp(cpu_list, "inherit") == 0) {
+		/* A populated cpuset cannot always be cleared back to an empty,
+		 * inheriting request. Resolve the root's current effective list so
+		 * the operation is reliable for both new and running domains. */
+		snprintf(path, sizeof(path), "%s/cpuset.cpus.effective", CG_ROOT);
+		if (read_text(path, inherited, sizeof(inherited)) != 0 ||
+		    inherited[0] == '\0') {
+			if (errno == 0)
+				errno = EINVAL;
+			return -1;
+		}
+		requested = inherited;
+	}
+
+	snprintf(path, sizeof(path), "%s/%s/cpuset.cpus", CG_ROOT, name);
+	if (read_text(path, previous, sizeof(previous)) != 0)
+		return -1;
+	if (write_text(path, requested) != 0)
+		return -1;
+
+	/* The requested list may be filtered by the parent's effective cpuset or
+	 * by CPU hotplug. Verify that it still leaves at least one usable CPU. */
+	snprintf(path, sizeof(path), "%s/%s/cpuset.cpus.effective", CG_ROOT, name);
+	if (read_text(path, effective, sizeof(effective)) == 0 && effective[0] != '\0')
+		return 0;
+
+	saved_errno = errno != 0 ? errno : EINVAL;
+	snprintf(path, sizeof(path), "%s/%s/cpuset.cpus", CG_ROOT, name);
+	if (write_text(path, previous) != 0)
+		fprintf(stderr, "tgbsctl: ERROR - unable to restore cpuset.cpus for %s: %s\n",
+			name, strerror(errno));
+	errno = saved_errno;
+	return -1;
+}
+
+int configure_domain_reclaim(const char *name, int reclaim)
+{
+	char path[PATH_MAX];
+	unsigned long long actual;
+
+	snprintf(path, sizeof(path), "%s/%s/cpu.reclaim", CG_ROOT, name);
+	if (write_u64(path, reclaim ? 1 : 0) != 0)
+		return -1;
+	if (read_u64(path, &actual) != 0)
+		return -1;
+	if (actual != (unsigned long long)(reclaim ? 1 : 0)) {
+		errno = EIO;
+		return -1;
+	}
 	return 0;
 }
 
@@ -358,13 +508,16 @@ static int write_meta(const char *tmp, pid_t pid, unsigned long long starttime)
 int cmd_run(int argc, char **argv)
 {
 	const char *name = NULL;
+	const char *cpu_list = NULL;
 	unsigned long long runtime_us = 0;
 	unsigned long long period_us = 0;
+	int reclaim = 0;
+	int reclaim_set = 0;
 	int opt;
 	int cmd_index = 0;
 	char name_path[288];
-	char meta_path[384];
-	char main_pid_path[384];
+	char meta_path[288];
+	char main_pid_path[PATH_MAX];
 	char tmp_path[PATH_MAX];
 	pid_t pid;
 	unsigned long long starttime = 0;
@@ -384,11 +537,13 @@ int cmd_run(int argc, char **argv)
 		{"name", required_argument, NULL, 'n'},
 		{"runtime-us", required_argument, NULL, 'r'},
 		{"period-us", required_argument, NULL, 'p'},
+		{"cpus", required_argument, NULL, 'c'},
+		{"reclaim", required_argument, NULL, 'R'},
 		{"help", no_argument, NULL, 'h'},
 		{0, 0, 0, 0},
 	};
 	optind = 2;
-	while ((opt = getopt_long(argc, argv, "+hn:r:p:", longopts, NULL)) != -1) {
+	while ((opt = getopt_long(argc, argv, "+hc:n:r:p:R:", longopts, NULL)) != -1) {
 		switch (opt) {
 		case 'h':
 			usage(argv[0]);
@@ -403,6 +558,14 @@ int cmd_run(int argc, char **argv)
 		case 'p':
 			if (parse_positive(optarg, &period_us) != 0)
 				error_exit("--period-us must be a strictly positive integer");
+			break;
+		case 'c':
+			cpu_list = optarg;
+			break;
+		case 'R':
+			if (parse_bool(optarg, &reclaim) != 0)
+				error_exit("--reclaim must be one of 0, 1, false, or true");
+			reclaim_set = 1;
 			break;
 		default:
 			usage(argv[0]);
@@ -441,6 +604,17 @@ int cmd_run(int argc, char **argv)
 		error_exit("unable to create metadata for %s: %s", name_path, strerror(errno));
 	snprintf(main_pid_path, sizeof(main_pid_path), "%s/main.pid", meta_path);
 
+	/* Configure placement while the group's runtime is still zero, so the
+	 * kernel performs bandwidth admission against the final active CPU set. */
+	if (cpu_list != NULL && configure_domain_cpus(name, cpu_list) != 0) {
+		int saved_errno = errno;
+		cleanup_cgroup(name);
+		cleanup_metadata(name);
+		errno = saved_errno;
+		error_exit("unable to set cpuset.cpus for %s to '%s': %s",
+			name, cpu_list, strerror(errno));
+	}
+
 	/* Configure the temporal contract before any task enters the cgroup. */
 	char cfg_path[PATH_MAX];
 	snprintf(cfg_path, sizeof(cfg_path), "%s/cpu.period_us", name_path);
@@ -455,6 +629,14 @@ int cmd_run(int argc, char **argv)
 	snprintf(cfg_path, sizeof(cfg_path), "%s/cpu.runtime_us", name_path);
 	if (read_u64(cfg_path, &runtime_us) != 0)
 		error_exit("unable to verify cpu.runtime_us on %s", cfg_path);
+
+	if (reclaim_set && configure_domain_reclaim(name, reclaim) != 0) {
+		int saved_errno = errno;
+		cleanup_cgroup(name);
+		cleanup_metadata(name);
+		errno = saved_errno;
+		error_exit("unable to set cpu.reclaim for %s: %s", name, strerror(errno));
+	}
 
 	/* Signal handling: the cgroup is the lifecycle unit. */
 	memset(&sa, 0, sizeof(sa));
@@ -584,7 +766,8 @@ int main(int argc, char **argv)
 	}
 	if (strcmp(argv[1], "set") == 0) {
 		if (argc != 5) {
-			fprintf(stderr, "tgbsctl: ERROR - set requires NAME, runtime|period, and VALUE_US\n");
+			fprintf(stderr,
+				"tgbsctl: ERROR - set requires NAME, runtime|period|cpus|reclaim, and VALUE\n");
 			usage(argv[0]);
 			return 2;
 		}

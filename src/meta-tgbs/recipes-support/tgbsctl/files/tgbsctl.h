@@ -11,6 +11,7 @@
 #define TGBSCTL_H
 
 #include <limits.h>
+#include <stddef.h>
 #include <sys/types.h>
 
 #ifndef CG_ROOT
@@ -20,6 +21,8 @@
 #ifndef RUN_ROOT
 #define RUN_ROOT "/run/tgbs"
 #endif
+
+#define CPU_LIST_SIZE 4096
 
 /* Derived domain state. Never stored; recomputed from cgroupfs and /proc. */
 enum domain_state {
@@ -40,16 +43,29 @@ int is_valid_name(const char *name);
 
 int parse_positive(const char *text, unsigned long long *out);
 
+/* Parse exactly 0/1 or true/false (case-insensitive). */
+int parse_bool(const char *text, int *out);
+
 void error_exit(const char *fmt, ...);
 
 int write_u64(const char *path, unsigned long long value);
 
 int read_u64(const char *path, unsigned long long *out);
 
+/* cgroup string-file helpers. read_text strips trailing newlines. */
+int write_text(const char *path, const char *value);
+
+int read_text(const char *path, char *out, size_t outsz);
+
 void verify_cgroup_env(void);
 
 /* Kill every task in NAME, using cgroup.kill or a per-PID fallback. */
 int cgroup_kill(const char *name);
+
+/* Configure and verify cgroup-v2 controls shared by run and set. */
+int configure_domain_cpus(const char *name, const char *cpu_list);
+
+int configure_domain_reclaim(const char *name, int reclaim);
 
 /* Read /proc/<pid>/stat starttime (kernel ticks). Returns 0 on success. */
 int read_starttime(pid_t pid, unsigned long long *out);

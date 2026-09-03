@@ -135,13 +135,55 @@ int cmd_freeze(const char *name, int freeze)
 int cmd_set(const char *name, const char *field, const char *value_text)
 {
 	char path[PATH_MAX];
+	char effective[CPU_LIST_SIZE];
 	unsigned long long value;
 	unsigned long long other;
 	unsigned long long actual;
 	const char *filename;
+	int reclaim;
 
 	if (require_domain(name) != 0)
 		return 1;
+
+	if (strcmp(field, "cpus") == 0) {
+		if (configure_domain_cpus(name, value_text) != 0) {
+			fprintf(stderr, "tgbsctl: ERROR - unable to set cpus for %s to '%s': %s\n",
+				name, value_text, strerror(errno));
+			return 1;
+		}
+		snprintf(path, sizeof(path), "%s/%s/cpuset.cpus.effective", CG_ROOT, name);
+		if (read_text(path, effective, sizeof(effective)) != 0) {
+			fprintf(stderr, "tgbsctl: ERROR - unable to verify effective cpus for %s: %s\n",
+				name, strerror(errno));
+			return 1;
+		}
+		printf("tgbsctl: set cpus for %s to %s (effective: %s)\n", name,
+			strcmp(value_text, "inherit") == 0 ? "inherit" : value_text,
+			effective);
+		return 0;
+	}
+
+	if (strcmp(field, "reclaim") == 0) {
+		if (parse_bool(value_text, &reclaim) != 0) {
+			fprintf(stderr,
+				"tgbsctl: ERROR - reclaim must be one of 0, 1, false, or true\n");
+			return 2;
+		}
+		if (configure_domain_reclaim(name, reclaim) != 0) {
+			fprintf(stderr, "tgbsctl: ERROR - unable to set reclaim for %s: %s\n",
+				name, strerror(errno));
+			return 1;
+		}
+		printf("tgbsctl: set reclaim for %s to %s\n",
+			name, reclaim ? "true" : "false");
+		return 0;
+	}
+	if (strcmp(field, "runtime") != 0 && strcmp(field, "period") != 0) {
+		fprintf(stderr,
+			"tgbsctl: ERROR - set field must be 'runtime', 'period', 'cpus', or 'reclaim'\n");
+		return 2;
+	}
+
 	if (parse_positive(value_text, &value) != 0) {
 		fprintf(stderr, "tgbsctl: ERROR - VALUE_US must be a strictly positive integer\n");
 		return 2;
@@ -175,9 +217,6 @@ int cmd_set(const char *name, const char *field, const char *value_text)
 				other);
 			return 1;
 		}
-	} else {
-		fprintf(stderr, "tgbsctl: ERROR - set field must be 'runtime' or 'period'\n");
-		return 2;
 	}
 
 	snprintf(path, sizeof(path), "%s/%s/%s", CG_ROOT, name, filename);

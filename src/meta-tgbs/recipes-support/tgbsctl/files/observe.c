@@ -186,6 +186,78 @@ static int read_config(const char *name, unsigned long long *runtime,
 	return 0;
 }
 
+static int read_cpus(const char *name, char *effective, size_t effective_sz)
+{
+	char path[PATH_MAX];
+
+	snprintf(path, sizeof(path), "%s/%s/cpuset.cpus.effective", CG_ROOT, name);
+	if (read_text(path, effective, effective_sz) != 0 || effective[0] == '\0')
+		return -1;
+	return 0;
+}
+
+/* cpuset.cpus.effective is emitted by the kernel as a canonical comma-separated
+ * list of CPU numbers and ranges (for example "0-3,8"). */
+static int count_cpus(const char *list, unsigned int *out)
+{
+	const char *p = list;
+	unsigned int count = 0;
+
+	if (list == NULL || list[0] == '\0')
+		return -1;
+
+	while (*p != '\0') {
+		char *end;
+		unsigned long first;
+		unsigned long last;
+		unsigned long range_count;
+
+		errno = 0;
+		first = strtoul(p, &end, 10);
+		if (errno != 0 || end == p)
+			return -1;
+		last = first;
+		p = end;
+
+		if (*p == '-') {
+			p++;
+			errno = 0;
+			last = strtoul(p, &end, 10);
+			if (errno != 0 || end == p || last < first)
+				return -1;
+			p = end;
+		}
+
+		range_count = last - first + 1;
+		if (range_count > UINT_MAX - count)
+			return -1;
+		count += (unsigned int)range_count;
+
+		if (*p == '\0')
+			break;
+		if (*p != ',')
+			return -1;
+		p++;
+		if (*p == '\0')
+			return -1;
+	}
+
+	*out = count;
+	return 0;
+}
+
+static int read_reclaim(const char *name, int *reclaim)
+{
+	char path[PATH_MAX];
+	unsigned long long value;
+
+	snprintf(path, sizeof(path), "%s/%s/cpu.reclaim", CG_ROOT, name);
+	if (read_u64(path, &value) != 0 || value > 1)
+		return -1;
+	*reclaim = value == 1;
+	return 0;
+}
+
 static int read_main_meta(const char *name, pid_t *pid,
 		unsigned long long *starttime)
 {
@@ -270,8 +342,9 @@ int cmd_list(void)
 	if (dir == NULL)
 		return 0;
 
-	printf("%-24s %-12s %-8s %-12s %-12s\n",
-		"NAME", "STATE", "PID", "RUNTIME_US", "PERIOD_US");
+	printf("%-24s %-12s %-8s %-12s %-12s %-13s %-12s %-8s\n",
+		"NAME", "STATE", "PID", "RUNTIME_US", "PERIOD_US", "TOTAL_BUDGET",
+		"CPUS", "RECLAIM");
 
 	struct dirent *ent;
 	while ((ent = readdir(dir)) != NULL) {
@@ -281,20 +354,37 @@ int cmd_list(void)
 		pid_t pid = 0;
 		unsigned long long starttime = 0;
 		if (read_main_meta(ent->d_name, &pid, &starttime) != 0) {
-			printf("%-24s %-12s %-8s %-12s %-12s\n",
-				ent->d_name, "initializing", "-", "-", "-");
+			printf("%-24s %-12s %-8s %-12s %-12s %-13s %-12s %-8s\n",
+				ent->d_name, "initializing", "-", "-", "-", "-", "-", "-");
 			continue;
 		}
 
 		enum domain_state st = domain_state(ent->d_name, pid, starttime);
 		unsigned long long runtime = 0, period = 0;
+		char effective[CPU_LIST_SIZE] = "";
+		char total_budget[32] = "-";
+		unsigned int cpu_count = 0;
+		int reclaim = 0;
 		int cfg = read_config(ent->d_name, &runtime, &period);
+		int cpu_cfg = read_cpus(ent->d_name, effective, sizeof(effective));
+		int reclaim_cfg = read_reclaim(ent->d_name, &reclaim);
+		if (cpu_cfg == 0 && count_cpus(effective, &cpu_count) != 0)
+			cpu_cfg = -1;
+		if (cfg == 0 && cpu_cfg == 0) {
+			long double total = (long double)runtime * 100.0L * cpu_count /
+				(long double)period;
 
-		printf("%-24s %-12s %-8lld %-12lld %-12lld\n",
+			snprintf(total_budget, sizeof(total_budget), "%.2Lf%%", total);
+		}
+
+		printf("%-24s %-12s %-8lld %-12lld %-12lld %-13s %-12s %-8s\n",
 			ent->d_name, state_name(st),
 			(long long) pid,
 			cfg == 0 ? (long long) runtime : -1,
-			cfg == 0 ? (long long) period : -1);
+			cfg == 0 ? (long long) period : -1,
+			total_budget,
+			cpu_cfg == 0 ? effective : "-",
+			reclaim_cfg == 0 ? (reclaim ? "true" : "false") : "-");
 	}
 	closedir(dir);
 	return 0;
@@ -321,6 +411,19 @@ int cmd_inspect(const char *name)
 
 	unsigned long long runtime = 0, period = 0;
 	int cfg = read_config(name, &runtime, &period);
+	char effective[CPU_LIST_SIZE] = "";
+	unsigned int cpu_count = 0;
+	int cpu_cfg = read_cpus(name, effective, sizeof(effective));
+	if (cpu_cfg == 0 && count_cpus(effective, &cpu_count) != 0)
+		cpu_cfg = -1;
+	int reclaim = 0;
+	int reclaim_cfg = read_reclaim(name, &reclaim);
+	long double budget_per_cpu = 0.0L;
+	long double total_budget = 0.0L;
+	if (cfg == 0 && cpu_cfg == 0) {
+		budget_per_cpu = (long double)runtime * 100.0L / (long double)period;
+		total_budget = budget_per_cpu * (long double)cpu_count;
+	}
 
 	char procs[2048] = "";
 	read_procs(name, procs, sizeof(procs));
@@ -334,6 +437,22 @@ int cmd_inspect(const char *name)
 	printf("Main PID:    %d\n", (int) pid);
 	printf("Runtime:     %lld us\n", cfg == 0 ? (long long) runtime : -1);
 	printf("Period:      %lld us\n", cfg == 0 ? (long long) period : -1);
+	if (cfg == 0 && cpu_cfg == 0)
+		printf("Budget/CPU:  %.2Lf %%\n", budget_per_cpu);
+	else
+		printf("Budget/CPU:  (unavailable)\n");
+	printf("CPUs:        %s\n", cpu_cfg == 0 ? effective : "(unavailable)");
+	if (cpu_cfg == 0)
+		printf("CPU count:   %u\n", cpu_count);
+	else
+		printf("CPU count:   (unavailable)\n");
+	if (cfg == 0 && cpu_cfg == 0)
+		printf("Total budget: %.2Lf %% (%.2Lf CPU)\n",
+			total_budget, total_budget / 100.0L);
+	else
+		printf("Total budget: (unavailable)\n");
+	printf("Reclaim:     %s\n", reclaim_cfg == 0 ?
+		(reclaim ? "true" : "false") : "(unavailable)");
 	printf("Processes:   %s\n", procs[0] ? procs : "(none)");
 	printf("Command:     %s\n", command != NULL ? command : "(not alive)");
 	free(command);
