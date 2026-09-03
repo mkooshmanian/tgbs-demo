@@ -8,10 +8,13 @@ Reusable Yocto/OpenEmbedded integration layer for TGBS.
 * `zybo-z7`: Digilent Zybo Z7 (Zynq-7000), using the upstream
   `xilinx/zynq-zybo-z7.dtb` and U-Boot's `xilinx_zynq_virt_defconfig`.
 
-Both kernel configurations start from `allnoconfig`; common TGBS, PREEMPT_RT
-and optional debug fragments are merged afterward. Programmable-logic IP for
-the Zybo Z7 should be enabled in a separate kernel fragment and described by a
-matching device-tree overlay.
+Both kernel configurations start from a machine-specific minimal defconfig;
+common TGBS, PREEMPT_RT and optional debug fragments are merged afterward, then
+`olddefconfig` fills unspecified symbols from their Kconfig defaults.
+Machine defconfigs live in `recipes-kernel/linux/files/machines/`, while
+reusable feature fragments live in `recipes-kernel/linux/files/fragments/`.
+Programmable-logic IP for the Zybo Z7 should be enabled in a separate kernel
+fragment and described by a matching device-tree overlay.
 
 ## Runtime control
 

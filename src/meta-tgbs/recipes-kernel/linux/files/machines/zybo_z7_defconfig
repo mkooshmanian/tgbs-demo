@@ -1,6 +1,7 @@
-# Digilent Zybo Z7: Zynq-7000 processing system peripherals present in the
-# upstream zynq-zybo-z7 device tree. Custom programmable-logic peripherals
-# belong in a separate fragment alongside the matching device-tree overlay.
+# Machine defconfig for the Digilent Zybo Z7: Zynq-7000 processing-system
+# peripherals present in the upstream zynq-zybo-z7 device tree.
+# Custom programmable-logic peripherals belong in a separate fragment
+# alongside the matching device-tree overlay.
 CONFIG_SYSVIPC=y
 CONFIG_NO_HZ_IDLE=y
 CONFIG_HIGH_RES_TIMERS=y

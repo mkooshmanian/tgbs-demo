@@ -15,11 +15,11 @@ PV = "${LINUX_VERSION}+tgbs${TGBS_VERSION}"
 SRC_URI = " \
     https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-${LINUX_VERSION}.tar.xz;name=kernel \
     https://github.com/mkooshmanian/TGBS/archive/refs/tags/patch/tgbs-v${TGBS_VERSION}-k${LINUX_VERSION}.tar.gz;name=tgbs \
-    file://tgbs.cfg \
+    file://fragments/tgbs.cfg \
 "
 
 SRC_URI += "${@bb.utils.contains('DISTRO_FEATURES', 'preempt-rt', \
-    'https://cdn.kernel.org/pub/linux/kernel/projects/rt/6.18/older/patch-6.18.13-rt4.patch.xz;name=preempt-rt file://preempt-rt.cfg', \
+    'https://cdn.kernel.org/pub/linux/kernel/projects/rt/6.18/older/patch-6.18.13-rt4.patch.xz;name=preempt-rt file://fragments/preempt-rt.cfg', \
     '', d)}"
 
 SRC_URI[kernel.sha256sum] = "9106a4605da9e31ff17659d958782b815f9591ab308d03b0ee21aad6c7dced4b"
@@ -31,20 +31,21 @@ B = "${WORKDIR}/build"
 
 TGBS_PATCH_DIR = "${WORKDIR}/TGBS-patch-tgbs-v${TGBS_VERSION}-k${LINUX_VERSION}/patches"
 
-# Start from allnoconfig and add only the selected machine's hardware.
-TGBS_MACHINE_CONFIG:qemuarm32 = "qemuarm32.cfg"
-TGBS_MACHINE_CONFIG:zybo-z7 = "zybo-z7.cfg"
+# Start from the selected machine's minimal defconfig.  The kernel class runs
+# olddefconfig after the fragments have been merged, filling unspecified
+# symbols from their Kconfig defaults.
+TGBS_MACHINE_DEFCONFIG:qemuarm32 = "machines/qemuarm32_defconfig"
+TGBS_MACHINE_DEFCONFIG:zybo-z7 = "machines/zybo_z7_defconfig"
 
-SRC_URI += "file://${TGBS_MACHINE_CONFIG}"
+SRC_URI += "file://${TGBS_MACHINE_DEFCONFIG}"
 
 COMPATIBLE_MACHINE = "^(qemuarm32|zybo-z7)$"
 
 KERNEL_CONFIG_FRAGMENTS = " \
-    ${WORKDIR}/${TGBS_MACHINE_CONFIG} \
-    ${WORKDIR}/tgbs.cfg \
+    ${WORKDIR}/fragments/tgbs.cfg \
 "
 KERNEL_CONFIG_FRAGMENTS:append = "${@bb.utils.contains('DISTRO_FEATURES', \
-    'preempt-rt', ' ${WORKDIR}/preempt-rt.cfg', '', d)}"
+    'preempt-rt', ' ${WORKDIR}/fragments/preempt-rt.cfg', '', d)}"
 
 do_apply_tgbs_patches() {
     bbnote "Applying TGBS ${TGBS_VERSION} patch series"
@@ -58,7 +59,7 @@ do_apply_tgbs_patches() {
 addtask apply_tgbs_patches after do_patch before do_configure
 
 do_configure:prepend() {
-    oe_runmake -C ${S} O=${B} allnoconfig
+    install -m 0644 ${WORKDIR}/${TGBS_MACHINE_DEFCONFIG} ${B}/.config
     ${S}/scripts/kconfig/merge_config.sh -m -O ${B} \
         ${B}/.config ${KERNEL_CONFIG_FRAGMENTS}
 }
