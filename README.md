@@ -82,16 +82,85 @@ kas shell kas/tgbs-demo.yml:kas/qemu.yml:kas/local.yml
 Then boot the image with:
 
 ```sh
-runqemu qemuarm32 nographic
+runqemu qemuarm32 slirp nographic
 ```
 
 The demo image allows direct root login without a password.
 
+### SSH access
+
+#### QEMU
+
+With QEMU running in SLIRP mode, connect to the guest with:
+
+```sh
+./tools/ssh-qemu.sh
+```
+
+TCP port `2222` on the host is forwarded to SSH port `22` in the guest. Using
+`2222` avoids conflicting with an SSH server already listening on port `22` of
+the build host and does not require binding a privileged port.
+
+QEMU images can generate a new SSH host key when a fresh root filesystem is
+booted. `StrictHostKeyChecking=no` accepts that changing key, while
+`UserKnownHostsFile=/dev/null` prevents ephemeral keys from being recorded in
+the user's `known_hosts` file. These options disable SSH host authentication
+and must therefore only be used for this local demonstration VM, not for a
+remote or production target.
+
+The script is equivalent to:
+
+```sh
+ssh -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@localhost
+```
+
+#### Zybo Z7
+
+The Zybo Z7 uses the static address `192.168.10.2/24`. For a direct Ethernet
+connection, configure the host interface and open an SSH session with:
+
+```sh
+./tools/ssh-zybo.sh <network-interface>
+```
+
+For example:
+
+```sh
+./tools/ssh-zybo.sh enp89s0
+```
+
+The interface name is an argument and is therefore not fixed by the project.
+Use `nmcli device status` to find it. The script creates or updates a dedicated
+NetworkManager connection named `tgbs-zybo-<network-interface>`, assigns
+`192.168.10.1/24` to the host, and connects to `root@192.168.10.2`. The
+connection is marked as never providing the host's default route.
+
+As with the QEMU command above, SSH host key checking is disabled because a
+newly flashed image can have a different host key. This is suitable for the
+direct demonstration link only.
+
+Alternative addresses and the SSH user can be selected without modifying the
+script:
+
+```sh
+ZYBO_HOST_ADDRESS=192.168.20.1/24 \
+ZYBO_TARGET_ADDRESS=192.168.20.2 \
+ZYBO_TARGET_USER=root \
+tools/ssh-zybo.sh enp89s0
+```
+
+The address configured in the Zybo Z7 image must use the same subnet. To remove
+the host connection afterwards, run:
+
+```sh
+sudo nmcli connection delete tgbs-zybo-<network-interface>
+```
+
 ## Kernel Debugging
 
 The `meta-kdebug` layer enables the kernel debug information and GDB scripts
-when the `kdebug` distribution feature is present. The default development
-configuration enables it in `kas/tgbs-demo.yml`.
+when the `kdebug` distribution feature is present. The `tgbs-demo`
+distribution enables it by default.
 
 Install the following host tools before starting a debug session:
 
@@ -122,13 +191,12 @@ this endpoint through `gdbTarget`. Select it in the VS Code Run and Debug view
 to attach to the running kernel.
 
 By default, `-s` does not stop the virtual CPU and the kernel starts before GDB
-connects. To debug the earliest kernel code, add the following setting to the
-`kernel-debug` block in `kas/tgbs-demo.yml`, then rebuild the image:
+connects. To debug the earliest kernel code, add the following setting to a
+`local_conf_header` block in `kas/tgbs-demo.yml`, then rebuild the image:
 
 ```yaml
 local_conf_header:
-  kernel-debug: |
-    DISTRO_FEATURES:append = " kdebug"
+  kernel-debug-stop: |
     KDEBUG_QEMU_ARGS = "-s -S"
 ```
 

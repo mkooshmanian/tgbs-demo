@@ -1,22 +1,16 @@
 header:
   version: 19
 
-distro: poky
+distro: tgbs-demo
 
 target:
-  - core-image-minimal
+  - tgbs-demo-image
 
 local_conf_header:
   demo-login: |
     EXTRA_IMAGE_FEATURES += "allow-empty-password empty-root-password allow-root-login"
   tgbs-kernel: |
     PREFERRED_PROVIDER_virtual/kernel = "linux-tgbs"
-  preempt-rt: |
-    DISTRO_FEATURES:append = " preempt-rt"
-  kernel-debug: |
-    DISTRO_FEATURES:append = " kdebug"
-  tgbs-runtime: |
-    IMAGE_INSTALL:append = " tgbs-runtime-init tgbsctl"
 
 repos:
   poky:
@@ -32,3 +26,5 @@ repos:
     path: src/meta-tgbs
   meta-kdebug:
     path: src/meta-kdebug
+  meta-tgbs-demo:
+    path: src/meta-tgbs-demo
