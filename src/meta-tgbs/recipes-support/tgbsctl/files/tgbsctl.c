@@ -28,7 +28,9 @@
 #include <wait.h>
 #include <limits.h>
 #include <getopt.h>
+#include <linux/magic.h>
 #include <sys/stat.h>
+#include <sys/vfs.h>
 #include <sys/types.h>
 
 #include "tgbsctl.h"
@@ -361,33 +363,23 @@ void error_exit(const char *fmt, ...)
 void verify_cgroup_env(void)
 {
 	FILE *f;
-	char source[64], target[64], type[64];
-	int found_cgroup2 = 0;
+	char controller[64];
+	struct statfs fs;
 	int found_cpu = 0;
 
 	if (access(CG_ROOT "/cgroup.controllers", R_OK) != 0)
 		error_exit(CG_ROOT "/cgroup.controllers is missing, the unified hierarchy is unavailable");
 
-	f = fopen("/proc/mounts", "r");
-	if (f == NULL)
-		error_exit("/proc/mounts is unreadable, the boot environment is incomplete");
-
-	while (fscanf(f, "%63s %63s %63s", source, target, type) == 3) {
-		if (strcmp(target, CG_ROOT) == 0 && strcmp(type, "cgroup2") == 0) {
-			found_cgroup2 = 1;
-			break;
-		}
-	}
-	fclose(f);
-
-	if (!found_cgroup2)
+	if (statfs(CG_ROOT, &fs) != 0)
+		error_exit("unable to inspect " CG_ROOT ": %s", strerror(errno));
+	if ((unsigned long)fs.f_type != CGROUP2_SUPER_MAGIC)
 		error_exit(CG_ROOT " is not mounted as cgroup2, TGBS requires cgroup v2");
 
 	f = fopen(CG_ROOT "/cgroup.controllers", "r");
 	if (f == NULL)
 		error_exit("unable to open " CG_ROOT "/cgroup.controllers");
-	while (fscanf(f, "%63s", type) == 1) {
-		if (strcmp(type, "cpu") == 0) {
+	while (fscanf(f, "%63s", controller) == 1) {
+		if (strcmp(controller, "cpu") == 0) {
 			found_cpu = 1;
 			break;
 		}
