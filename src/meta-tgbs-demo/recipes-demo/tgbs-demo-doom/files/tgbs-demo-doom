@@ -1,0 +1,123 @@
+#!/bin/sh
+
+set -eu
+
+DOMAIN="doom"
+ENTRYPOINT="/usr/libexec/tgbs-demo/doom-entrypoint"
+
+DEFAULT_RUNTIME_US=65000
+DEFAULT_PERIOD_US=100000
+DEFAULT_CPUS="1"
+DEFAULT_RECLAIM="0"
+
+usage()
+{
+    cat <<EOF
+Usage:
+  tgbs-demo-doom start
+  tgbs-demo-doom stop
+  tgbs-demo-doom set runtime_us RUNTIME
+  tgbs-demo-doom set period_us PERIOD
+  tgbs-demo-doom set cpus CPUS
+  tgbs-demo-doom set reclaim RECLAIM
+
+Default TGBS contract:
+  runtime:  ${DEFAULT_RUNTIME_US} us
+  period:   ${DEFAULT_PERIOD_US} us
+  cpus:     ${DEFAULT_CPUS}
+  reclaim:  ${DEFAULT_RECLAIM}
+EOF
+}
+
+start()
+{
+    echo "Starting TGBS Doom demo:"
+    echo "  domain:   ${DOMAIN}"
+    echo "  runtime:  ${DEFAULT_RUNTIME_US} us"
+    echo "  period:   ${DEFAULT_PERIOD_US} us"
+    echo "  cpus:     ${DEFAULT_CPUS}"
+    echo "  reclaim:  ${DEFAULT_RECLAIM}"
+
+    tgbsctl run \
+        --name "${DOMAIN}" \
+        --runtime-us "${DEFAULT_RUNTIME_US}" \
+        --period-us "${DEFAULT_PERIOD_US}" \
+        --cpus "${DEFAULT_CPUS}" \
+        --reclaim "${DEFAULT_RECLAIM}" \
+        "${ENTRYPOINT}"
+}
+
+stop()
+{
+    echo "Stopping TGBS Doom demo"
+    tgbsctl kill "${DOMAIN}"
+}
+
+set_value()
+{
+    if [ "$#" -ne 2 ]; then
+        usage
+        exit 1
+    fi
+
+    key="$1"
+    value="$2"
+
+    case "${key}" in
+        runtime_us)
+            tgbsctl set "${DOMAIN}" runtime "${value}"
+            ;;
+
+        period_us)
+            tgbsctl set "${DOMAIN}" period "${value}"
+            ;;
+
+        cpus)
+            tgbsctl set "${DOMAIN}" cpus "${value}"
+            ;;
+
+        reclaim)
+            tgbsctl set "${DOMAIN}" reclaim "${value}"
+            ;;
+
+        *)
+            echo "Unknown property: ${key}" >&2
+            usage
+            exit 1
+            ;;
+    esac
+}
+
+case "${1:-}" in
+    start)
+        shift
+        [ "$#" -eq 0 ] || {
+            usage
+            exit 1
+        }
+        start
+        ;;
+
+    stop)
+        shift
+        [ "$#" -eq 0 ] || {
+            usage
+            exit 1
+        }
+        stop
+        ;;
+
+    set)
+        shift
+        set_value "$@"
+        ;;
+
+    -h|--help|help)
+        usage
+        ;;
+
+    *)
+        usage
+        exit 1
+        ;;
+esac

@@ -1,0 +1,83 @@
+#!/bin/sh
+
+set -eu
+
+export DISPLAY=:0
+
+LOG_DIR="/var/log/tgbs-demo"
+mkdir -p "${LOG_DIR}"
+
+XVFB_LOG="${LOG_DIR}/doom-xvfb.log"
+VNC_LOG="${LOG_DIR}/doom-x11vnc.log"
+DOOM_LOG="${LOG_DIR}/doom.log"
+
+XVFB_PID=""
+VNC_PID=""
+DOOM_PID=""
+
+cleanup()
+{
+    trap - EXIT INT TERM
+
+    [ -n "${DOOM_PID}" ] && kill "${DOOM_PID}" 2>/dev/null || true
+    [ -n "${VNC_PID}" ]  && kill "${VNC_PID}"  2>/dev/null || true
+    [ -n "${XVFB_PID}" ] && kill "${XVFB_PID}" 2>/dev/null || true
+
+    wait 2>/dev/null || true
+}
+
+trap cleanup EXIT INT TERM
+
+#
+# Virtual X server
+#
+Xvfb :0 \
+    -screen 0 640x480x24 \
+    -ac \
+    -nolisten tcp \
+    >"${XVFB_LOG}" 2>&1 &
+
+XVFB_PID=$!
+
+#
+# Wait until Xvfb exposes its UNIX socket.
+#
+count=0
+
+while [ ! -S /tmp/.X11-unix/X0 ]; do
+    count=$((count + 1))
+
+    if [ "${count}" -ge 50 ]; then
+        echo "tgbs-demo-doom: Xvfb failed to start" >&2
+        exit 1
+    fi
+
+    sleep 0.1
+done
+
+#
+# VNC server
+#
+x11vnc \
+    -display :0 \
+    -forever \
+    -shared \
+    -nopw \
+    -rfbport 5900 \
+    >"${VNC_LOG}" 2>&1 &
+
+VNC_PID=$!
+
+#
+# Doom
+#
+chocolate-doom \
+    -nomouse \
+    >"${DOOM_LOG}" 2>&1 &
+
+DOOM_PID=$!
+
+#
+# Doom defines the lifetime of the demo workload.
+#
+wait "${DOOM_PID}"
