@@ -1,0 +1,122 @@
+#!/bin/sh
+
+set -eu
+
+DOMAIN="mixed"
+ENTRYPOINT="/usr/libexec/tgbs-demo/mixed-entrypoint"
+
+DEFAULT_RUNTIME_US=6000
+DEFAULT_PERIOD_US=20000
+DEFAULT_CPUS="1"
+DEFAULT_RECLAIM="0"
+
+usage()
+{
+    cat <<EOF
+Usage:
+  tgbs-demo-mixed start
+  tgbs-demo-mixed stop
+  tgbs-demo-mixed set runtime_us RUNTIME
+  tgbs-demo-mixed set period_us PERIOD
+  tgbs-demo-mixed set cpus CPUS
+  tgbs-demo-mixed set reclaim RECLAIM
+
+Default TGBS contract:
+  runtime:  ${DEFAULT_RUNTIME_US} us
+  period:   ${DEFAULT_PERIOD_US} us
+  cpus:     ${DEFAULT_CPUS}
+  reclaim:  ${DEFAULT_RECLAIM}
+EOF
+}
+
+start()
+{
+    echo "Starting TGBS mixed workload:"
+    echo "  domain:   ${DOMAIN}"
+    echo "  runtime:  ${DEFAULT_RUNTIME_US} us"
+    echo "  period:   ${DEFAULT_PERIOD_US} us"
+    echo "  cpus:     ${DEFAULT_CPUS}"
+    echo "  reclaim:  ${DEFAULT_RECLAIM}"
+
+    exec tgbsctl run \
+        --name "${DOMAIN}" \
+        --runtime-us "${DEFAULT_RUNTIME_US}" \
+        --period-us "${DEFAULT_PERIOD_US}" \
+        --cpus "${DEFAULT_CPUS}" \
+        --reclaim "${DEFAULT_RECLAIM}" \
+        "${ENTRYPOINT}"
+}
+
+stop()
+{
+    tgbsctl kill "${DOMAIN}"
+}
+
+set_value()
+{
+    [ "$#" -eq 2 ] || {
+        usage
+        exit 1
+    }
+
+    key="$1"
+    value="$2"
+
+    case "${key}" in
+        runtime_us)
+            tgbsctl set "${DOMAIN}" runtime "${value}"
+            ;;
+
+        period_us)
+            tgbsctl set "${DOMAIN}" period "${value}"
+            ;;
+
+        cpus)
+            tgbsctl set "${DOMAIN}" cpus "${value}"
+            ;;
+
+        reclaim)
+            tgbsctl set "${DOMAIN}" reclaim "${value}"
+            ;;
+
+        *)
+            echo "Unknown property: ${key}" >&2
+            usage
+            exit 1
+            ;;
+    esac
+}
+
+case "${1:-}" in
+    start)
+        shift
+        [ "$#" -eq 0 ] || {
+            usage
+            exit 1
+        }
+        start
+        ;;
+
+    stop)
+        shift
+        [ "$#" -eq 0 ] || {
+            usage
+            exit 1
+        }
+        stop
+        ;;
+
+    set)
+        shift
+        set_value "$@"
+        ;;
+
+    help|-h|--help)
+        usage
+        ;;
+
+    *)
+        usage
+        exit 1
+        ;;
+esac

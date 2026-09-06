@@ -5,4 +5,5 @@ inherit packagegroup
 RDEPENDS:${PN} = " \
     dropbear \
     tgbs-demo-doom \
+    tgbs-demo-mixed \
 "
