@@ -1,6 +1,31 @@
 # TGBS Demo
 
-Yocto-based demonstration for TGBS (Task Group Bandwidth Server).
+Yocto-based demonstration of the **Task Group Bandwidth Server (TGBS)** on
+QEMU ARM and the Digilent Zybo Z7. The image combines temporal CPU isolation,
+mixed real-time workloads, live terminal monitoring, and a graphical Doom
+workload in a compact, reproducible environment.
+
+![TGBS demo overview](docs/images/tgbs-demo-overview.png)
+
+The screenshot shows the complete QEMU demonstration:
+
+- `tgbs-demo-top` reports per-CPU occupation, TGBS domain budgets, and tasks;
+- `tgbs-demo-mixed-timeline` plots RT response times against their deadlines;
+- `tgbs-fetch` provides a compact summary of the target system;
+- Chocolate Doom runs through Xvfb and is exposed over VNC.
+
+## Demo Components
+
+The generated image includes the following commands:
+
+| Command | Purpose |
+| --- | --- |
+| `tgbsctl` | Create, inspect, update, freeze, and stop TGBS-managed cgroups. |
+| `tgbs-demo-doom` | Run Doom inside the `doom` domain with a configurable temporal CPU contract. |
+| `tgbs-demo-mixed` | Run the JSON-configured `mixed` domain containing FIFO RT tasks and FAIR background tasks. |
+| `tgbs-demo-top` | Display CPU usage for TGBS domains and their internal tasks. |
+| `tgbs-demo-mixed-timeline` | Plot the live response-time history of the RT tasks using terminal Braille graphics. |
+| `tgbs-fetch` | Display target, kernel, CPU, memory, uptime, and TGBS information. |
 
 ## Targets
 
@@ -15,17 +40,20 @@ The QEMU configuration matches the Zynq-7000 SoC: an ARMv7 (Cortex-A9) target wi
 
 ```text
 .
+├── docs/
+│   └── images/
 ├── kas/
 │   ├── local.yml
 │   ├── qemu.yml
 │   ├── tgbs-demo.yml
 │   └── zybo-z7.yml
-└── src/
+├── src/
     ├── meta-openembedded/
     ├── meta-kdebug/
     ├── meta-tgbs/
     ├── meta-tgbs-demo/
     └── poky/
+└── tools/
 ```
 
 The kas configuration is split by responsibility:
@@ -86,6 +114,54 @@ runqemu qemuarm32 slirp nographic
 ```
 
 The demo image allows direct root login without a password.
+
+### Running the demonstration
+
+After booting the target, start the two example domains from a control shell:
+
+```sh
+tgbs-demo-doom start &
+tgbs-demo-mixed start &
+```
+
+Open two additional SSH sessions for the live monitors:
+
+```sh
+tgbs-demo-top
+```
+
+```sh
+tgbs-demo-mixed-timeline
+```
+
+The default configuration places both workloads on CPU 1. Doom reserves 65%
+of one CPU, while the mixed workload reserves 30%. The remaining CPU is left
+available to the base system and the control tools. Run the system summary at
+any time with:
+
+```sh
+tgbs-fetch
+```
+
+To view Doom, connect a VNC client to `localhost:5900` for QEMU or to
+`192.168.10.2:5900` for the default Zybo Z7 configuration. The VNC endpoint
+has no password and is intended only for the isolated demonstration network.
+
+The contracts can be changed while the workloads are running. For example:
+
+```sh
+tgbs-demo-doom set runtime_us 50000
+tgbs-demo-mixed set runtime_us 4000
+tgbsctl list
+tgbsctl inspect doom
+```
+
+Stop the workloads with:
+
+```sh
+tgbs-demo-doom stop
+tgbs-demo-mixed stop
+```
 
 ### SSH access
 

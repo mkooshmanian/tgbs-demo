@@ -2,6 +2,19 @@
 
 Yocto/OpenEmbedded layer containing components specific to the TGBS demonstration.
 
+## System summary
+
+`tgbs-fetch` is a lightweight, dependency-free equivalent to `fastfetch`
+tailored to the demo image:
+
+```sh
+tgbs-fetch
+```
+
+It reports the host, distribution, kernel, architecture, CPU, memory, uptime,
+TGBS availability, and number of active TGBS domains. Use `--no-color` or set
+`NO_COLOR` for plain output.
+
 ## TGBS monitor
 
 `tgbs-demo-top` is installed in the demo image. It is a lightweight interactive
