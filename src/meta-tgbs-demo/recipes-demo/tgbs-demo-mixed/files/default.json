@@ -3,7 +3,7 @@
         "num_cpu": 2,
         "subsystems": [
             {
-                "name": "C1",
+                "name": "mixed",
                 "vcpus": [
                     { "budget": 6, "period": 20, "policy": "DEADLINE", "affinity": [1] }
                 ],
