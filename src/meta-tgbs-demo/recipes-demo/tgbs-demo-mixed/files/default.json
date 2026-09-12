@@ -1,0 +1,20 @@
+{
+    "system": {
+        "num_cpu": 2,
+        "subsystems": [
+            {
+                "name": "C1",
+                "vcpus": [
+                    { "budget": 6, "period": 20, "policy": "DEADLINE", "affinity": [1] }
+                ],
+                "tasks": [
+                    { "type": "TaskRT", "name": "T1", "execution_time": 6,  "period": 80,  "policy": "FIFO", "priority": 90 },
+                    { "type": "TaskRT", "name": "T2", "execution_time": 12, "period": 200, "policy": "FIFO", "priority": 80 },
+                    { "type": "TaskRT", "name": "T3", "execution_time": 20, "period": 400, "policy": "FIFO", "priority": 70 },
+                    { "type": "TaskQoS", "name": "T4", "execution_time": 10, "policy": "OTHER" },
+                    { "type": "TaskQoS", "name": "T5", "execution_time": 10, "policy": "OTHER" }
+                ]
+            }
+        ]
+    }
+}

@@ -1,5 +1,5 @@
-SUMMARY = "TGBS mixed workload demonstration"
-DESCRIPTION = "Static mixed-policy workload composed of periodic RT tasks and continuous FAIR background tasks, executed inside a TGBS domain."
+SUMMARY = "Configurable TGBS mixed workload demonstration"
+DESCRIPTION = "JSON-configured mixed-policy workload composed of periodic RT tasks and continuous FAIR background tasks, executed inside a TGBS domain."
 
 LICENSE = "MIT"
 LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda2f7b4f302"
@@ -7,6 +7,7 @@ LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda
 SRC_URI = " \
     file://tgbs-demo-mixed \
     file://tgbs-demo-mixed-entrypoint \
+    file://default.json \
 "
 
 S = "${WORKDIR}"
@@ -14,6 +15,7 @@ S = "${WORKDIR}"
 RDEPENDS:${PN} = " \
     packagegroup-tgbs-runtime \
     fake-task \
+    jq \
 "
 
 do_install() {
@@ -26,8 +28,16 @@ do_install() {
     install -m 0755 \
         ${WORKDIR}/tgbs-demo-mixed-entrypoint \
         ${D}${libexecdir}/tgbs-demo/mixed-entrypoint
+
+    install -d ${D}${sysconfdir}/tgbs-demo/mixed
+    install -m 0644 \
+        ${WORKDIR}/default.json \
+        ${D}${sysconfdir}/tgbs-demo/mixed/default.json
 }
 
 FILES:${PN} += " \
     ${libexecdir}/tgbs-demo/mixed-entrypoint \
+    ${sysconfdir}/tgbs-demo/mixed/default.json \
 "
+
+CONFFILES:${PN} += "${sysconfdir}/tgbs-demo/mixed/default.json"

@@ -2,83 +2,144 @@
 
 set -eu
 
-DOMAIN="mixed"
+DEFAULT_CONFIG="/etc/tgbs-demo/mixed/default.json"
 ENTRYPOINT="/usr/libexec/tgbs-demo/mixed-entrypoint"
-
-DEFAULT_RUNTIME_US=6000
-DEFAULT_PERIOD_US=20000
-DEFAULT_CPUS="1"
-DEFAULT_RECLAIM="0"
 
 usage()
 {
     cat <<EOF
 Usage:
-  tgbs-demo-mixed start
-  tgbs-demo-mixed stop
-  tgbs-demo-mixed set runtime_us RUNTIME
-  tgbs-demo-mixed set period_us PERIOD
-  tgbs-demo-mixed set cpus CPUS
-  tgbs-demo-mixed set reclaim RECLAIM
+  tgbs-demo-mixed start [CONFIG]
+  tgbs-demo-mixed stop [CONFIG]
+  tgbs-demo-mixed set runtime_us RUNTIME [CONFIG]
+  tgbs-demo-mixed set period_us PERIOD [CONFIG]
+  tgbs-demo-mixed set cpus CPUS [CONFIG]
+  tgbs-demo-mixed set reclaim RECLAIM [CONFIG]
 
-Default TGBS contract:
-  runtime:  ${DEFAULT_RUNTIME_US} us
-  period:   ${DEFAULT_PERIOD_US} us
-  cpus:     ${DEFAULT_CPUS}
-  reclaim:  ${DEFAULT_RECLAIM}
+CONFIG defaults to ${DEFAULT_CONFIG}.
+The current implementation supports one subsystem with one DEADLINE vCPU and
+an arbitrary number of TaskRT/FIFO or TaskQoS/OTHER tasks.
 EOF
+}
+
+die()
+{
+    echo "tgbs-demo-mixed: $*" >&2
+    exit 1
+}
+
+validate_config()
+{
+    config="$1"
+
+    [ -r "${config}" ] || die "cannot read configuration: ${config}"
+
+    jq -e '
+        def positive_integer:
+            type == "number" and floor == . and . > 0;
+        def valid_name:
+            type == "string" and test("^[A-Za-z0-9_.-]+$") and length <= 255;
+        def valid_rt_task:
+            .type == "TaskRT" and
+            (.name | valid_name) and
+            (.execution_time | positive_integer) and
+            (.period | positive_integer) and
+            .execution_time <= .period and
+            .policy == "FIFO" and
+            (.priority | positive_integer) and .priority <= 99;
+        def valid_qos_task:
+            .type == "TaskQoS" and
+            (.name | valid_name) and
+            (.execution_time | positive_integer) and
+            .policy == "OTHER";
+
+        .system | type == "object" and
+        (.num_cpu | positive_integer) and
+        (.subsystems | type == "array" and length == 1) and
+        (.subsystems[0] |
+            (.name | valid_name) and
+            (.vcpus | type == "array" and length == 1) and
+            (.vcpus[0] |
+                (.budget | positive_integer) and
+                (.period | positive_integer) and
+                .budget <= .period and
+                .policy == "DEADLINE" and
+                (.affinity | type == "array" and length > 0) and
+                all(.affinity[];
+                    type == "number" and floor == . and
+                    . >= 0 and . < $num_cpu)) and
+            (.tasks | type == "array" and length > 0) and
+            all(.tasks[]; valid_rt_task or valid_qos_task))
+    ' --argjson num_cpu "$(jq -r '.system.num_cpu // 0' "${config}" 2>/dev/null || echo 0)" \
+        "${config}" >/dev/null 2>&1 ||
+        die "unsupported or invalid configuration: ${config}"
+}
+
+load_domain()
+{
+    config="$1"
+    validate_config "${config}"
+    DOMAIN=$(jq -r '.system.subsystems[0].name' "${config}")
 }
 
 start()
 {
+    config="$1"
+    load_domain "${config}"
+
+    budget_ms=$(jq -r '.system.subsystems[0].vcpus[0].budget' "${config}")
+    period_ms=$(jq -r '.system.subsystems[0].vcpus[0].period' "${config}")
+    cpus=$(jq -r '.system.subsystems[0].vcpus[0].affinity | join(",")' "${config}")
+    runtime_us=$((budget_ms * 1000))
+    period_us=$((period_ms * 1000))
+
     echo "Starting TGBS mixed workload:"
+    echo "  config:   ${config}"
     echo "  domain:   ${DOMAIN}"
-    echo "  runtime:  ${DEFAULT_RUNTIME_US} us"
-    echo "  period:   ${DEFAULT_PERIOD_US} us"
-    echo "  cpus:     ${DEFAULT_CPUS}"
-    echo "  reclaim:  ${DEFAULT_RECLAIM}"
+    echo "  runtime:  ${runtime_us} us"
+    echo "  period:   ${period_us} us"
+    echo "  cpus:     ${cpus}"
 
     exec tgbsctl run \
         --name "${DOMAIN}" \
-        --runtime-us "${DEFAULT_RUNTIME_US}" \
-        --period-us "${DEFAULT_PERIOD_US}" \
-        --cpus "${DEFAULT_CPUS}" \
-        --reclaim "${DEFAULT_RECLAIM}" \
-        "${ENTRYPOINT}"
+        --runtime-us "${runtime_us}" \
+        --period-us "${period_us}" \
+        --cpus "${cpus}" \
+        "${ENTRYPOINT}" "${config}"
 }
 
 stop()
 {
+    config="$1"
+    load_domain "${config}"
     tgbsctl kill "${DOMAIN}"
 }
 
 set_value()
 {
-    [ "$#" -eq 2 ] || {
+    [ "$#" -ge 2 ] && [ "$#" -le 3 ] || {
         usage
         exit 1
     }
 
     key="$1"
     value="$2"
+    config="${3:-${DEFAULT_CONFIG}}"
+    load_domain "${config}"
 
     case "${key}" in
         runtime_us)
             tgbsctl set "${DOMAIN}" runtime "${value}"
             ;;
-
         period_us)
             tgbsctl set "${DOMAIN}" period "${value}"
             ;;
-
         cpus)
             tgbsctl set "${DOMAIN}" cpus "${value}"
             ;;
-
         reclaim)
             tgbsctl set "${DOMAIN}" reclaim "${value}"
             ;;
-
         *)
             echo "Unknown property: ${key}" >&2
             usage
@@ -90,31 +151,27 @@ set_value()
 case "${1:-}" in
     start)
         shift
-        [ "$#" -eq 0 ] || {
+        [ "$#" -le 1 ] || {
             usage
             exit 1
         }
-        start
+        start "${1:-${DEFAULT_CONFIG}}"
         ;;
-
     stop)
         shift
-        [ "$#" -eq 0 ] || {
+        [ "$#" -le 1 ] || {
             usage
             exit 1
         }
-        stop
+        stop "${1:-${DEFAULT_CONFIG}}"
         ;;
-
     set)
         shift
         set_value "$@"
         ;;
-
     help|-h|--help)
         usage
         ;;
-
     *)
         usage
         exit 1

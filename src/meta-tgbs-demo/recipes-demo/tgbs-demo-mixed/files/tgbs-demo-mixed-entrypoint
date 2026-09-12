@@ -2,25 +2,12 @@
 
 set -eu
 
-# Workload configuration (milliseconds for periods and execution times).
-HIGH_PRIO_EXEC_MS=6
-HIGH_PRIO_PERIOD_MS=80
-HIGH_PRIO_PRIORITY=80
+[ "$#" -eq 1 ] || {
+    echo "Usage: mixed-entrypoint CONFIG" >&2
+    exit 1
+}
 
-MEDIUM_PRIO_EXEC_MS=12
-MEDIUM_PRIO_PERIOD_MS=200
-MEDIUM_PRIO_PRIORITY=75
-
-LOW_PRIO_EXEC_MS=20
-LOW_PRIO_PERIOD_MS=400
-LOW_PRIO_PRIORITY=70
-
-BACKGROUND_EXEC_MS=10
-
-# Leave empty when no metrics collector is running. To enable metrics, set for
-# example: METRICS_ARGS="--metrics-socket=/run/tgbs-demo/metrics.sock"
-METRICS_ARGS=""
-
+CONFIG="$1"
 PIDS=""
 
 cleanup()
@@ -36,61 +23,50 @@ cleanup()
 
 trap cleanup EXIT INT TERM
 
-fake-task \
-    -w \
-    --periodic \
-    --sched=fifo \
-    --prio="${HIGH_PRIO_PRIORITY}" \
-    ${METRICS_ARGS} \
-    "${HIGH_PRIO_PERIOD_MS}" "${HIGH_PRIO_EXEC_MS}" &
-PID_FAST=$!
-PIDS="${PIDS} ${PID_FAST}"
+TASKS=$(jq -r '
+    .system.subsystems[0].tasks[] |
+    if .type == "TaskRT" then
+        [.type, .name, .execution_time, .period, .policy, .priority]
+    else
+        [.type, .name, .execution_time, "-", .policy, "-"]
+    end |
+    @tsv
+' "${CONFIG}")
 
-fake-task \
-    -w \
-    --periodic \
-    --sched=fifo \
-    --prio="${MEDIUM_PRIO_PRIORITY}" \
-    ${METRICS_ARGS} \
-    "${MEDIUM_PRIO_PERIOD_MS}" "${MEDIUM_PRIO_EXEC_MS}" &
-PID_MEDIUM=$!
-PIDS="${PIDS} ${PID_MEDIUM}"
+while IFS="$(printf '\t')" read -r type name execution_time period policy priority; do
+    case "${type}:${policy}" in
+        TaskRT:FIFO)
+            echo "Starting ${name}: periodic FIFO, C=${execution_time} ms, T=${period} ms, priority=${priority}"
+            fake-task \
+                -w \
+                --periodic \
+                --sched=fifo \
+                --prio="${priority}" \
+                "${period}" "${execution_time}" &
+            ;;
+        TaskQoS:OTHER)
+            echo "Starting ${name}: continuous FAIR, C=${execution_time} ms"
+            fake-task \
+                -w \
+                --continuous \
+                --sched=fair \
+                "${execution_time}" &
+            ;;
+        *)
+            echo "Unsupported task ${name}: type=${type}, policy=${policy}" >&2
+            exit 1
+            ;;
+    esac
 
-fake-task \
-    -w \
-    --periodic \
-    --sched=fifo \
-    --prio="${LOW_PRIO_PRIORITY}" \
-    ${METRICS_ARGS} \
-    "${LOW_PRIO_PERIOD_MS}" "${LOW_PRIO_EXEC_MS}" &
-PID_SLOW=$!
-PIDS="${PIDS} ${PID_SLOW}"
-
-fake-task \
-    -w \
-    --continuous \
-    --sched=fair \
-    ${METRICS_ARGS} \
-    "${BACKGROUND_EXEC_MS}" &
-PID_BG1=$!
-PIDS="${PIDS} ${PID_BG1}"
-
-fake-task \
-    -w \
-    --continuous \
-    --sched=fair \
-    ${METRICS_ARGS} \
-    "${BACKGROUND_EXEC_MS}" &
-PID_BG2=$!
-PIDS="${PIDS} ${PID_BG2}"
+    PIDS="${PIDS} $!"
+done <<EOF
+${TASKS}
+EOF
 
 sleep 0.2
 
-kill -USR1 \
-    "${PID_FAST}" \
-    "${PID_MEDIUM}" \
-    "${PID_SLOW}" \
-    "${PID_BG1}" \
-    "${PID_BG2}"
+for pid in ${PIDS}; do
+    kill -USR1 "${pid}"
+done
 
 wait
