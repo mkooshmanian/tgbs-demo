@@ -37,6 +37,7 @@
 #include <sys/resource.h>
 #include <signal.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -267,6 +268,7 @@ static void sleep_until_abs_monotonic_ns(int64_t abs_ns)
 
 static int metrics_fd = -1;
 static struct sockaddr_un metrics_dst;
+static socklen_t metrics_dst_len;
 
 /*
  * On-wire metrics record: one datagram per job, little-endian.
@@ -307,7 +309,7 @@ _Static_assert(sizeof(metrics_record_t) == FAKEJOB_TOTAL_SIZE,
                "metrics_record_t must be exactly FAKEJOB_TOTAL_SIZE bytes");
 
 /**
- * @brief Open (non-blocking connect) a Unix datagram socket for metrics.
+ * @brief Open a Unix datagram socket for best-effort metrics.
  *
  * @param path Socket path (abstract or pathname socket).
  * @return true on success, false on error.
@@ -327,19 +329,21 @@ static bool metrics_socket_open(const char *path)
     memset(&metrics_dst, 0, sizeof(metrics_dst));
     metrics_dst.sun_family = AF_UNIX;
 
-    bool is_abstract = (path[0] == '\0');
-    size_t len = strlen(path);
+    bool is_abstract = (path[0] == '@');
+    const char *socket_name = is_abstract ? path + 1 : path;
+    size_t len = strlen(socket_name);
     if (is_abstract)
     {
         /* NUL prefix + name for abstract sockets */
-        if (len >= sizeof(metrics_dst.sun_path) - 1)
+        if (len == 0 || len >= sizeof(metrics_dst.sun_path) - 1)
         {
             fprintf(stderr, "metrics: abstract socket name too long\n");
             close(fd);
             return false;
         }
         metrics_dst.sun_path[0] = '\0';
-        memcpy(&metrics_dst.sun_path[1], path, len);
+        memcpy(&metrics_dst.sun_path[1], socket_name, len);
+        metrics_dst_len = (socklen_t)(offsetof(struct sockaddr_un, sun_path) + 1 + len);
     }
     else
     {
@@ -351,13 +355,7 @@ static bool metrics_socket_open(const char *path)
         }
         memcpy(metrics_dst.sun_path, path, len);
         metrics_dst.sun_path[len] = '\0';
-    }
-
-    if (connect(fd, (struct sockaddr *)&metrics_dst, sizeof(metrics_dst)) < 0)
-    {
-        fprintf(stderr, "metrics: cannot connect to '%s': %s\n", path, strerror(errno));
-        close(fd);
-        return false;
+        metrics_dst_len = (socklen_t)(offsetof(struct sockaddr_un, sun_path) + len + 1);
     }
 
     metrics_fd = fd;
@@ -383,6 +381,7 @@ static inline void metrics_emit_job(uint64_t iter, int64_t start_ns, int64_t fin
     memset(&rec, 0, sizeof(rec));
     rec.magic = FAKEJOB_MAGIC;
     rec.version = FAKEJOB_VERSION;
+    rec.type = FAKEJOB_TYPE_JOB;
     rec.pid = (uint32_t)getpid();
     rec.iter = (uint32_t)iter;
     rec.start_ns = (uint64_t)start_ns;
@@ -393,7 +392,8 @@ static inline void metrics_emit_job(uint64_t iter, int64_t start_ns, int64_t fin
 
     /* datagrams are best-effort; our records are tiny (well under typical
      * limits, ~8 KiB), so a single write is safe. */
-    ssize_t sent = send(metrics_fd, buf, FAKEJOB_TOTAL_SIZE, MSG_NOSIGNAL);
+    ssize_t sent = sendto(metrics_fd, buf, FAKEJOB_TOTAL_SIZE, MSG_NOSIGNAL,
+                          (struct sockaddr *)&metrics_dst, metrics_dst_len);
     (void)sent;
 }
 
@@ -422,7 +422,8 @@ static inline void metrics_emit_t0(int64_t release_ns)
     rec.start_ns = (uint64_t)release_ns;
     rec.finish_ns = 0;
 
-    ssize_t sent = send(metrics_fd, &rec, FAKEJOB_TOTAL_SIZE, MSG_NOSIGNAL);
+    ssize_t sent = sendto(metrics_fd, &rec, FAKEJOB_TOTAL_SIZE, MSG_NOSIGNAL,
+                          (struct sockaddr *)&metrics_dst, metrics_dst_len);
     (void)sent;
 }
 
@@ -569,7 +570,8 @@ static void run_periodic_task(int64_t period_ms, int64_t exec_ms, int64_t iterat
 {
     const int64_t period_ns = NS_FROM_MS(period_ms);
     int64_t next_release = now_monotonic_ns(); // start immediately
-    metrics_emit_t0(next_release);
+    const int64_t first_release = next_release;
+    metrics_emit_t0(first_release);
 
     int64_t k = 0;
     while (iterations < 0 || k < iterations)
@@ -587,6 +589,9 @@ static void run_periodic_task(int64_t period_ms, int64_t exec_ms, int64_t iterat
         const int64_t finish_time = now_monotonic_ns();
         const int64_t end_cpu = thread_cpu_time_ns();
 
+        /* Repeating the same origin lets a collector attach after this task
+         * has started and synchronize before the following job record. */
+        metrics_emit_t0(first_release);
         metrics_emit_job(k, start_time, finish_time);
 
         const int64_t release_ms = release_ns / 1000000LL;

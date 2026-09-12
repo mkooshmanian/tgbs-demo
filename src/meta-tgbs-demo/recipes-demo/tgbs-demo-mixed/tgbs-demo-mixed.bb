@@ -7,10 +7,18 @@ LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda
 SRC_URI = " \
     file://tgbs-demo-mixed \
     file://tgbs-demo-mixed-entrypoint \
+    file://tgbs-demo-mixed-timeline.c \
     file://default.json \
 "
 
 S = "${WORKDIR}"
+
+CFLAGS += "-Wall -Wextra"
+
+do_compile() {
+    ${CC} ${CFLAGS} ${LDFLAGS} -o ${B}/tgbs-demo-mixed-timeline \
+        ${WORKDIR}/tgbs-demo-mixed-timeline.c
+}
 
 RDEPENDS:${PN} = " \
     packagegroup-tgbs-runtime \
@@ -23,6 +31,9 @@ do_install() {
     install -m 0755 \
         ${WORKDIR}/tgbs-demo-mixed \
         ${D}${bindir}/tgbs-demo-mixed
+    install -m 0755 \
+        ${B}/tgbs-demo-mixed-timeline \
+        ${D}${bindir}/tgbs-demo-mixed-timeline
 
     install -d ${D}${libexecdir}/tgbs-demo
     install -m 0755 \

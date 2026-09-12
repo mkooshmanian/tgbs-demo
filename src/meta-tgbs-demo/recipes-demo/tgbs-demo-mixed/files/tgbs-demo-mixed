@@ -19,6 +19,9 @@ Usage:
 CONFIG defaults to ${DEFAULT_CONFIG}.
 The current implementation supports one subsystem with one DEADLINE vCPU and
 an arbitrary number of TaskRT/FIFO or TaskQoS/OTHER tasks.
+
+Run tgbs-demo-mixed-timeline in another terminal to display the live
+response-time history of the TaskRT jobs.
 EOF
 }
 
