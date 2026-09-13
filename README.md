@@ -24,7 +24,7 @@ The generated image includes the following commands:
 | `tgbs-demo-doom` | Run Doom inside the `doom` domain with a configurable temporal CPU contract. |
 | `tgbs-demo-mixed` | Run the JSON-configured `mixed` domain containing FIFO RT tasks and FAIR background tasks. |
 | `tgbs-demo-top` | Display CPU usage for TGBS domains and their internal tasks. |
-| `tgbs-demo-mixed-timeline` | Plot the live response-time history of the RT tasks using terminal Braille graphics. |
+| `tgbs-demo-mixed-timeline` | Plot RT response times on a shared time window with terminal Braille graphics and automatic vertical scales. |
 | `tgbs-fetch` | Display target, kernel, CPU, memory, uptime, and TGBS information. |
 
 ## Targets

@@ -34,8 +34,14 @@
 #define FAKEJOB_TOTAL_SIZE 36u
 
 #define MAX_RT_TASKS 32
-#define HISTORY_SIZE 256
+#define HISTORY_SIZE 2048
+#define MAX_GRAPH_WIDTH 512
+#define MAX_GRAPH_HEIGHT 5
 #define TASK_NAME_SIZE 64
+#define DEFAULT_WINDOW_SECONDS 30u
+#define MIN_WINDOW_SECONDS 5u
+#define MAX_WINDOW_SECONDS 120u
+#define NS_PER_SECOND 1000000000ull
 
 #define C_RESET "\033[0m"
 #define C_BOLD "\033[1m"
@@ -62,6 +68,7 @@ _Static_assert(sizeof(struct metrics_record) == FAKEJOB_TOTAL_SIZE,
 
 struct sample {
 	double response_ms;
+	uint64_t finish_ns;
 	bool missed;
 };
 
@@ -85,6 +92,7 @@ static volatile sig_atomic_t stop_requested;
 static struct termios saved_termios;
 static bool terminal_saved;
 static bool use_color = true;
+static unsigned int window_seconds = DEFAULT_WINDOW_SECONDS;
 static const char *socket_name = "@tgbs-demo-mixed";
 static const char *state_dir = "/run/tgbs-demo/mixed";
 
@@ -137,6 +145,15 @@ static void terminal_size(unsigned int *rows, unsigned int *columns)
 		if (size.ws_col != 0)
 			*columns = size.ws_col;
 	}
+}
+
+static uint64_t monotonic_now_ns(void)
+{
+	struct timespec now;
+
+	if (clock_gettime(CLOCK_MONOTONIC, &now) != 0)
+		return 0;
+	return (uint64_t)now.tv_sec * NS_PER_SECOND + (uint64_t)now.tv_nsec;
 }
 
 static int bind_metrics_socket(const char *name)
@@ -244,7 +261,8 @@ static struct rt_task *get_task(uint32_t pid)
 	return task;
 }
 
-static void append_sample(struct rt_task *task, double response_ms)
+static void append_sample(struct rt_task *task, double response_ms,
+		uint64_t finish_ns)
 {
 	unsigned int index;
 	bool missed = task->period_ms > 0.0 && response_ms > task->period_ms;
@@ -257,6 +275,7 @@ static void append_sample(struct rt_task *task, double response_ms)
 		task->history_start = (task->history_start + 1) % HISTORY_SIZE;
 	}
 	task->history[index].response_ms = response_ms;
+	task->history[index].finish_ns = finish_ns;
 	task->history[index].missed = missed;
 	task->total_jobs++;
 	if (missed)
@@ -287,7 +306,7 @@ static void process_record(const struct metrics_record *record)
 	if (record->finish_ns < release_ns)
 		return;
 	response_ms = (double)(record->finish_ns - release_ns) / 1000000.0;
-	append_sample(task, response_ms);
+	append_sample(task, response_ms, record->finish_ns);
 }
 
 static void drain_socket(int fd)
@@ -312,7 +331,7 @@ static struct sample *history_sample(struct rt_task *task, unsigned int offset)
 }
 
 static void set_plot_pixel(uint8_t *dots, uint8_t *severity,
-		unsigned int width, unsigned int x, unsigned int y,
+		unsigned int width, unsigned int height, int x, int y,
 		uint8_t sample_severity)
 {
 	static const uint8_t dot_bits[4][2] = {
@@ -321,15 +340,21 @@ static void set_plot_pixel(uint8_t *dots, uint8_t *severity,
 		{ 1u << 2, 1u << 5 },
 		{ 1u << 6, 1u << 7 }
 	};
-	unsigned int cell = (y / 4) * width + x / 2;
+	unsigned int cell;
 
-	dots[cell] |= dot_bits[y % 4][x % 2];
+	if (x < 0 || y < 0 || x >= (int)(width * 2) ||
+	    y >= (int)(height * 4))
+		return;
+	cell = ((unsigned int)y / 4) * width + (unsigned int)x / 2;
+
+	dots[cell] |= dot_bits[(unsigned int)y % 4][(unsigned int)x % 2];
 	if (sample_severity > severity[cell])
 		severity[cell] = sample_severity;
 }
 
 static void draw_plot_line(uint8_t *dots, uint8_t *severity,
-		unsigned int width, int x0, int y0, int x1, int y1,
+		unsigned int width, unsigned int height,
+		int x0, int y0, int x1, int y1,
 		uint8_t sample_severity)
 {
 	int dx = abs(x1 - x0);
@@ -339,15 +364,18 @@ static void draw_plot_line(uint8_t *dots, uint8_t *severity,
 	int error = dx + dy;
 
 	for (;;) {
-		set_plot_pixel(dots, severity, width, (unsigned int)x0,
-			(unsigned int)y0, sample_severity);
+		int twice_error;
+
+		set_plot_pixel(dots, severity, width, height, x0, y0,
+			sample_severity);
 		if (x0 == x1 && y0 == y1)
 			break;
-		if (2 * error >= dy) {
+		twice_error = 2 * error;
+		if (twice_error >= dy) {
 			error += dy;
 			x0 += sx;
 		}
-		if (2 * error <= dx) {
+		if (twice_error <= dx) {
 			error += dx;
 			y0 += sy;
 		}
@@ -369,78 +397,107 @@ static void print_braille(uint8_t dots)
 		fwrite(utf8, 1, sizeof(utf8), stdout);
 }
 
-static void render_task(struct rt_task *task, unsigned int graph_width,
-		unsigned int graph_height)
+static double nice_scale_max(double value)
 {
-	uint8_t dots[HISTORY_SIZE * 4] = { 0 };
-	uint8_t severity[HISTORY_SIZE * 4] = { 0 };
+	static const double steps[] = {
+		1.0, 1.25, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0
+	};
+	double magnitude = 1.0;
+	double normalized;
+
+	if (value <= 0.0)
+		return 1.0;
+	normalized = value;
+	while (normalized > 10.0) {
+		normalized /= 10.0;
+		magnitude *= 10.0;
+	}
+	while (normalized < 1.0) {
+		normalized *= 10.0;
+		magnitude /= 10.0;
+	}
+	for (unsigned int i = 0; i < sizeof(steps) / sizeof(steps[0]); i++) {
+		if (normalized <= steps[i])
+			return steps[i] * magnitude;
+	}
+	return 10.0 * magnitude;
+}
+
+static void render_task(struct rt_task *task, unsigned int graph_width,
+		unsigned int graph_height, uint64_t now_ns)
+{
+	uint8_t dots[MAX_GRAPH_WIDTH * MAX_GRAPH_HEIGHT] = { 0 };
+	uint8_t severity[MAX_GRAPH_WIDTH * MAX_GRAPH_HEIGHT] = { 0 };
 	double last = 0.0;
 	double sum = 0.0;
 	double maximum = 0.0;
+	double scale_max;
 	unsigned int pixel_width = graph_width * 2;
 	unsigned int pixel_height = graph_height * 4;
-	unsigned int first = task->history_count > pixel_width ?
-		task->history_count - pixel_width : 0;
-	unsigned int shown = task->history_count - first;
-	unsigned int x_offset = pixel_width - shown;
+	uint64_t window_ns = (uint64_t)window_seconds * NS_PER_SECOND;
+	uint64_t window_start_ns = now_ns > window_ns ? now_ns - window_ns : 0;
+	unsigned int visible_samples = 0;
 	int previous_x = -1;
 	int previous_y = -1;
-	uint8_t previous_severity = 0;
 
 	for (unsigned int i = 0; i < task->history_count; i++) {
-		double value = history_sample(task, i)->response_ms;
+		struct sample *sample = history_sample(task, i);
+		double value;
+
+		if (sample->finish_ns < window_start_ns || sample->finish_ns > now_ns)
+			continue;
+		value = sample->response_ms;
 		sum += value;
 		if (value > maximum)
 			maximum = value;
 		last = value;
+		visible_samples++;
 	}
-	printf("%s%-10.10s%s FIFO P%-2d  deadline %7.1f ms  last %7.1f  "
+	scale_max = nice_scale_max(maximum * 1.1);
+	printf("%s%-10.10s%s FIFO P%-2d  D %7.1f ms  last %7.1f  "
 	       "avg %7.1f  max %7.1f  miss %llu/%llu\n",
 		color(C_BOLD), task->name, color(C_RESET), task->priority,
 		task->period_ms, last,
-		task->history_count ? sum / task->history_count : 0.0, maximum,
+		visible_samples ? sum / visible_samples : 0.0, maximum,
 		task->total_misses, task->total_jobs);
 
-	printf("%7.1f %s", task->period_ms, color(C_RED));
-	for (unsigned int i = 0; i < graph_width; i++)
-		printf("─");
-	printf(" deadline%s\n", color(C_RESET));
-
-	for (unsigned int i = first; i < task->history_count; i++) {
+	for (unsigned int i = 0; i < task->history_count; i++) {
 		struct sample *sample = history_sample(task, i);
-		double ratio = task->period_ms > 0.0 ?
-			sample->response_ms / task->period_ms : 0.0;
-		int x = (int)(x_offset + i - first);
+		double ratio;
+		uint64_t elapsed_ns;
+		int x;
 		int y;
-		uint8_t sample_severity;
 
-		if (ratio < 0.0)
-			ratio = 0.0;
+		if (sample->finish_ns < window_start_ns || sample->finish_ns > now_ns)
+			continue;
+		elapsed_ns = sample->finish_ns - window_start_ns;
+		x = (int)((elapsed_ns * (pixel_width - 1)) / window_ns);
+		if (x >= (int)pixel_width)
+			x = (int)pixel_width - 1;
+		ratio = sample->response_ms / scale_max;
 		if (ratio > 1.0)
 			ratio = 1.0;
 		y = (int)((1.0 - ratio) * (pixel_height - 1) + 0.5);
-		sample_severity = sample->missed ? 2 : ratio >= 0.8 ? 1 : 0;
 		if (previous_x >= 0) {
-			uint8_t line_severity = sample_severity > previous_severity ?
-				sample_severity : previous_severity;
-
-			draw_plot_line(dots, severity, graph_width, previous_x,
-				previous_y, x, y, line_severity);
-		} else {
-			set_plot_pixel(dots, severity, graph_width,
-				(unsigned int)x, (unsigned int)y, sample_severity);
+			draw_plot_line(dots, severity, graph_width, graph_height,
+				previous_x, previous_y, x, y, 0);
 		}
+		set_plot_pixel(dots, severity, graph_width, graph_height,
+			x, y, sample->missed ? 2 : 0);
 		previous_x = x;
 		previous_y = y;
-		previous_severity = sample_severity;
 	}
 
 	for (unsigned int row = 0; row < graph_height; row++) {
-		printf(row + 1 == graph_height ? "%7.1f " : "        ", 0.0);
+		if (row == 0)
+			printf("%7.1f ", scale_max);
+		else if (row + 1 == graph_height)
+			printf("%7.1f ", 0.0);
+		else
+			printf("        ");
 		for (unsigned int column = 0; column < graph_width; column++) {
 			unsigned int cell = row * graph_width + column;
-			const char *plot_color = severity[cell] >= 2 ? C_RED :
-				severity[cell] == 1 ? C_YELLOW : C_GREEN;
+			const char *plot_color = severity[cell] >= 2 ? C_RED : C_GREEN;
 
 			printf("%s", color(plot_color));
 			print_braille(dots[cell]);
@@ -455,6 +512,7 @@ static void render(bool interactive)
 	unsigned int rows, columns;
 	unsigned int graph_width;
 	unsigned int graph_height = 4;
+	uint64_t now_ns = monotonic_now_ns();
 	time_t now = time(NULL);
 	struct tm local;
 	char timestamp[32];
@@ -463,9 +521,9 @@ static void render(bool interactive)
 	struct rt_task *visible[MAX_RT_TASKS];
 
 	terminal_size(&rows, &columns);
-	graph_width = columns > 20 ? columns - 20 : 16;
-	if (graph_width > HISTORY_SIZE)
-		graph_width = HISTORY_SIZE;
+	graph_width = columns > 9 ? columns - 9 : 16;
+	if (graph_width > MAX_GRAPH_WIDTH)
+		graph_width = MAX_GRAPH_WIDTH;
 	for (unsigned int i = 0; i < task_count; i++) {
 		if (tasks[i].period_ms > 0.0 && tasks[i].have_t0)
 			visible[eligible++] = &tasks[i];
@@ -486,20 +544,21 @@ static void render(bool interactive)
 	if (eligible > 0) {
 		unsigned int lines_per_task = rows > 3 ? (rows - 3) / eligible : 1;
 
-		graph_height = lines_per_task > 3 ? lines_per_task - 3 : 1;
-		if (graph_height > 4)
-			graph_height = 4;
+		graph_height = lines_per_task > 2 ? lines_per_task - 2 : 1;
+		if (graph_height > MAX_GRAPH_HEIGHT)
+			graph_height = MAX_GRAPH_HEIGHT;
 	}
 	if (interactive)
 		printf("\033[H\033[2J");
 	localtime_r(&now, &local);
 	strftime(timestamp, sizeof(timestamp), "%H:%M:%S", &local);
-	printf("%s%sRT TIMELINE%s  %s  response time / deadline",
-		color(C_BOLD), color(C_CYAN), color(C_RESET), timestamp);
+	printf("%s%sRT TIMELINE%s  %s  response time  window %us",
+		color(C_BOLD), color(C_CYAN), color(C_RESET), timestamp,
+		window_seconds);
 	if (interactive)
 		printf("  %sq quit%s", color(C_DIM), color(C_RESET));
-	printf("\n%sEach point is one completed job; red line = deadline; red point = miss.%s\n\n",
-		color(C_DIM), color(C_RESET));
+	printf("\n%sshared X: -%us to now; auto Y per task; red = response > D.%s\n\n",
+		color(C_DIM), window_seconds, color(C_RESET));
 	if (eligible == 0) {
 		printf("%sWaiting for RT metrics on %s ...%s\n",
 			color(C_YELLOW), socket_name, color(C_RESET));
@@ -507,12 +566,12 @@ static void render(bool interactive)
 	} else {
 		for (unsigned int i = 0; i < eligible; i++) {
 			if (interactive && 3 + (displayed + 1) *
-			    (graph_height + 3) > rows) {
+			    (graph_height + 2) > rows) {
 				printf("%s... more tasks hidden; enlarge the terminal%s\n",
 					color(C_DIM), color(C_RESET));
 				break;
 			}
-			render_task(visible[i], graph_width, graph_height);
+			render_task(visible[i], graph_width, graph_height, now_ns);
 			putchar('\n');
 			displayed++;
 		}
@@ -527,6 +586,7 @@ static void usage(FILE *stream, const char *program)
 		"Display live response-time timelines for tgbs-demo-mixed RT tasks.\n"
 		"It can be started before or after the mixed workload.\n\n"
 		"  -r, --refresh MS   screen refresh period (default: 200)\n"
+		"  -w, --window SEC   shared time window (default: 30, range: 5-120)\n"
 		"  -b, --batch        plain output without terminal control\n"
 		"      --no-color     disable ANSI colors\n"
 		"  -h, --help         show this help\n",
@@ -537,6 +597,7 @@ int main(int argc, char **argv)
 {
 	static const struct option options[] = {
 		{ "refresh", required_argument, NULL, 'r' },
+		{ "window", required_argument, NULL, 'w' },
 		{ "batch", no_argument, NULL, 'b' },
 		{ "no-color", no_argument, NULL, 1000 },
 		{ "help", no_argument, NULL, 'h' },
@@ -549,7 +610,7 @@ int main(int argc, char **argv)
 	int option;
 	const char *override;
 
-	while ((option = getopt_long(argc, argv, "r:bh", options, NULL)) != -1) {
+	while ((option = getopt_long(argc, argv, "r:w:bh", options, NULL)) != -1) {
 		switch (option) {
 		case 'r': {
 			char *end;
@@ -563,6 +624,22 @@ int main(int argc, char **argv)
 				return 2;
 			}
 			refresh_ms = (int)value;
+			break;
+		}
+		case 'w': {
+			char *end;
+			unsigned long value;
+
+			errno = 0;
+			value = strtoul(optarg, &end, 10);
+			if (errno != 0 || end == optarg || *end != '\0' ||
+			    value < MIN_WINDOW_SECONDS || value > MAX_WINDOW_SECONDS) {
+				fprintf(stderr,
+					"tgbs-demo-mixed-timeline: invalid window: %s\n",
+					optarg);
+				return 2;
+			}
+			window_seconds = (unsigned int)value;
 			break;
 		}
 		case 'b': batch = true; break;
@@ -596,12 +673,23 @@ int main(int argc, char **argv)
 	signal(SIGHUP, signal_handler);
 
 	render(interactive);
+	uint64_t next_render_ns = monotonic_now_ns() +
+		(uint64_t)refresh_ms * 1000000ull;
 	while (!stop_requested) {
 		struct pollfd descriptors[2] = {
 			{ .fd = socket_fd, .events = POLLIN },
 			{ .fd = STDIN_FILENO, .events = interactive ? POLLIN : 0 }
 		};
-		int ready = poll(descriptors, 2, refresh_ms);
+		uint64_t now_ns = monotonic_now_ns();
+		int timeout_ms = 0;
+		int ready;
+
+		if (next_render_ns > now_ns) {
+			uint64_t remaining_ns = next_render_ns - now_ns;
+
+			timeout_ms = (int)((remaining_ns + 999999ull) / 1000000ull);
+		}
+		ready = poll(descriptors, 2, timeout_ms);
 		if (ready < 0 && errno != EINTR)
 			break;
 		if (ready > 0 && (descriptors[0].revents & POLLIN))
@@ -612,9 +700,13 @@ int main(int argc, char **argv)
 			    (key == 'q' || key == 'Q'))
 				break;
 		}
-		render(interactive);
-		if (!interactive && batch)
-			fflush(stdout);
+		now_ns = monotonic_now_ns();
+		if (now_ns >= next_render_ns) {
+			render(interactive);
+			next_render_ns = now_ns + (uint64_t)refresh_ms * 1000000ull;
+			if (!interactive && batch)
+				fflush(stdout);
+		}
 	}
 	close(socket_fd);
 	if (interactive)

@@ -56,12 +56,15 @@ tgbs-demo-mixed-timeline
 tgbs-demo-mixed start
 ```
 
-Each task has its own scrolling Braille line plot, scaled from zero to that
-task's period (its implicit deadline). Braille cells provide sub-character
-resolution without drawing a filled area, and the plot height adapts to the
-available terminal space. The summary shows the latest, average, and
-maximum response time and the cumulative deadline-miss count. Yellow samples
-are at least 80% of the deadline; red samples missed it. Press `q` to quit.
+Each task has its own scrolling Braille line plot and automatic vertical scale.
+All plots share the same wall-clock window, so their horizontal positions
+represent the same instants even though the tasks have different periods.
+The default window is 30 seconds and can be changed with `--window SEC`.
+Braille cells provide sub-character resolution, and the plot height adapts to
+the available terminal space. The summary shows statistics for the visible
+window and the cumulative deadline-miss count. Samples that exceed the task's
+period (its implicit deadline) are red; the deadline remains visible as `D` in
+the task header. Press `q` to quit.
 
 The timeline and mixed entrypoint exchange the existing fixed-size `FAKEJOB`
 datagrams over the abstract Unix socket `@tgbs-demo-mixed`. Only `TaskRT`
