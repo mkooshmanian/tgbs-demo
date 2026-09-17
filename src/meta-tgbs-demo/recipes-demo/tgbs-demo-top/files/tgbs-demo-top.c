@@ -713,10 +713,10 @@ static void render(const struct snapshot *current, const struct snapshot *previo
 		printed_rows++;
 	}
 
-	printf("\n%sTGBS DOMAINS%s  %sCPU%%: 100%% = one CPU; USE/BUDGET: actual / reserved%s\n",
+	printf("\n%sTGBS DOMAINS%s  %sUSE: 100%% = one CPU; USE/BUDGET: actual / reserved%s\n",
 		color(C_BOLD), color(C_RESET), color(C_DIM), color(C_RESET));
 	printf(" %-18s %-8s %7s %10s  %-*s %8s %8s\n",
-		"DOMAIN", "STATE", "CPU%", "BUDGET/CPU",
+		"DOMAIN", "STATE", "USE", "BUDGET",
 		(int)bar_width + 2, "USE/BUDGET", "CPUS", "NB TASKS");
 	printed_rows += 3;
 	if (current->domain_count == 0) {
