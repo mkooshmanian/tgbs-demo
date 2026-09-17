@@ -11,6 +11,8 @@ usage()
 Usage:
   tgbs-demo-mixed start [CONFIG]
   tgbs-demo-mixed stop [CONFIG]
+  tgbs-demo-mixed pause [CONFIG]
+  tgbs-demo-mixed resume [CONFIG]
   tgbs-demo-mixed set runtime_us RUNTIME [CONFIG]
   tgbs-demo-mixed set period_us PERIOD [CONFIG]
   tgbs-demo-mixed set cpus CPUS [CONFIG]
@@ -118,6 +120,14 @@ stop()
     tgbsctl kill "${DOMAIN}"
 }
 
+freeze_domain()
+{
+    action="$1"
+    config="$2"
+    load_domain "${config}"
+    tgbsctl "${action}" "${DOMAIN}"
+}
+
 set_value()
 {
     [ "$#" -ge 2 ] && [ "$#" -le 3 ] || {
@@ -167,6 +177,15 @@ case "${1:-}" in
             exit 1
         }
         stop "${1:-${DEFAULT_CONFIG}}"
+        ;;
+    pause|resume)
+        action="$1"
+        shift
+        [ "$#" -le 1 ] || {
+            usage
+            exit 1
+        }
+        freeze_domain "${action}" "${1:-${DEFAULT_CONFIG}}"
         ;;
     set)
         shift

@@ -16,6 +16,8 @@ usage()
 Usage:
   tgbs-demo-doom start
   tgbs-demo-doom stop
+  tgbs-demo-doom pause
+  tgbs-demo-doom resume
   tgbs-demo-doom set runtime_us RUNTIME
   tgbs-demo-doom set period_us PERIOD
   tgbs-demo-doom set cpus CPUS
@@ -105,6 +107,16 @@ case "${1:-}" in
             exit 1
         }
         stop
+        ;;
+
+    pause|resume)
+        action="$1"
+        shift
+        [ "$#" -eq 0 ] || {
+            usage
+            exit 1
+        }
+        tgbsctl "${action}" "${DOMAIN}"
         ;;
 
     set)

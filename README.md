@@ -156,6 +156,15 @@ tgbsctl list
 tgbsctl inspect doom
 ```
 
+Pause and resume either workload without stopping its domain:
+
+```sh
+tgbs-demo-doom pause
+tgbs-demo-mixed pause
+tgbs-demo-doom resume
+tgbs-demo-mixed resume
+```
+
 Stop the workloads with:
 
 ```sh

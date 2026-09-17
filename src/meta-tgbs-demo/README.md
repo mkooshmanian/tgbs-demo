@@ -56,6 +56,11 @@ tgbs-demo-mixed-timeline
 tgbs-demo-mixed start
 ```
 
+Use `tgbs-demo-mixed pause [CONFIG]` and `tgbs-demo-mixed resume [CONFIG]`
+to freeze and unfreeze the configured domain. The Doom demo supports
+`tgbs-demo-doom pause` and `tgbs-demo-doom resume` in the same way. These
+commands use the cgroup freezer through `tgbsctl`.
+
 Each task has its own scrolling Braille line plot and automatic vertical scale.
 All plots share the same wall-clock window, so their horizontal positions
 represent the same instants even though the tasks have different periods.
