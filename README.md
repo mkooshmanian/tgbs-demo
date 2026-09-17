@@ -34,7 +34,7 @@ Currently supported:
 * QEMU ARM (`qemuarm32`)
 * Digilent Zybo Z7 / Zynq-7000 (`zybo-z7`)
 
-The QEMU configuration matches the Zynq-7000 SoC: an ARMv7 (Cortex-A9) target with 2 virtual CPUs and 1 GiB of RAM, sharing the same CPU tune as the Zybo Z7 so both machines build with a single toolchain.
+The QEMU configuration matches the Zynq-7000 SoC: an ARMv7 (Cortex-A9) target with 2 virtual CPUs and 1 GiB of RAM, sharing the same CPU tune as the Zybo Z7 so both machines build with a single toolchain. QEMU deliberately runs without a graphical display to mirror the Zybo Z7 setup: the graphical workload runs in Xvfb and is exposed through x11vnc.
 
 ## Project Structure
 
@@ -96,8 +96,23 @@ kas build kas/tgbs-demo.yml:kas/zybo-z7.yml:kas/local.yml
 ```
 
 The Zybo build deploys `boot.bin`, `u-boot.bin`, `zImage`,
-`zynq-zybo-z7.dtb`, and the root filesystem. SD-card image assembly is not
-automated yet.
+`zynq-zybo-z7.dtb`, and a ready-to-write `.wic` SD-card image.
+
+## Release bundles
+
+After building both targets and publishing a version tag on `origin`, run:
+
+```sh
+./tools/do-release.sh
+```
+
+The script checks the required Yocto artifacts and creates two folders and
+their `.tar.gz` archives under `build/release/`, named
+`tgbs-demo-qemu-<version>` and `tgbs-demo-zybo-z7-<version>`. Each archive
+contains the image files, helper scripts, and a short launch README. The
+script uses the highest published numeric version tag (for example `v1.0`)
+and does not start a build. It stops if bundles for that version already
+exist.
 
 ## Run
 
