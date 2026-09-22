@@ -240,6 +240,21 @@ static unsigned int count_cpu_list(const char *list)
 	return count;
 }
 
+static bool single_cpu_from_list(const char *list, unsigned int *cpu)
+{
+	char *end;
+	unsigned long parsed;
+
+	if (count_cpu_list(list) != 1)
+		return false;
+	errno = 0;
+	parsed = strtoul(list, &end, 10);
+	if (errno != 0 || end == list || *end != '\0' || parsed >= MAX_CPUS)
+		return false;
+	*cpu = (unsigned int)parsed;
+	return true;
+}
+
 static int read_cpus(struct snapshot *snapshot)
 {
 	FILE *stream = fopen("/proc/stat", "r");
@@ -576,13 +591,15 @@ static int compare_tasks(const void *left, const void *right)
 {
 	const struct task_sample *a = left;
 	const struct task_sample *b = right;
-	int domain_order = strcmp(a->domain, b->domain);
-	if (domain_order != 0)
-		return domain_order;
+	int domain_order;
+
 	if (a->cpu_percent < b->cpu_percent)
 		return 1;
 	if (a->cpu_percent > b->cpu_percent)
 		return -1;
+	domain_order = strcmp(a->domain, b->domain);
+	if (domain_order != 0)
+		return domain_order;
 	return a->tid > b->tid ? 1 : a->tid < b->tid ? -1 : 0;
 }
 
@@ -665,7 +682,9 @@ static void render(const struct snapshot *current, const struct snapshot *previo
 	unsigned int printed_rows = 0;
 	unsigned int bar_width;
 	double tgbs_percent = 0.0;
+	double pinned_tgbs_percent[MAX_CPUS] = { 0.0 };
 	double all_busy = 0.0;
+	double accounted_busy;
 	double other_percent;
 	double idle_percent;
 	time_t now = time(NULL);
@@ -687,21 +706,43 @@ static void render(const struct snapshot *current, const struct snapshot *previo
 
 	printf("%sCPU OCCUPATION%s\n", color(C_BOLD), color(C_RESET));
 	printed_rows++;
+	for (unsigned int i = 0; i < current->domain_count; i++) {
+		const struct domain_sample *domain = &current->domains[i];
+		unsigned int cpu;
+
+		tgbs_percent += domain->cpu_percent;
+		if (single_cpu_from_list(domain->cpus, &cpu))
+			pinned_tgbs_percent[cpu] += domain->cpu_percent;
+	}
 	for (unsigned int i = 0; i < current->cpu_count; i++) {
 		double load = cpu_load(&current->cpus[i], &previous->cpus[i]);
+
+		/* A cpuset migration may split the interval's /proc/stat accounting
+		 * between the old and new CPU.  A single-CPU TGBS domain, however, is
+		 * displayed under its current effective CPU.  Make its cgroup usage a
+		 * floor for that CPU instead of briefly showing less load than the
+		 * domain known to be assigned to it. */
+		if (load < pinned_tgbs_percent[i])
+			load = pinned_tgbs_percent[i];
+		if (load > 100.0)
+			load = 100.0;
 		all_busy += load;
 		printf(" CPU%-3u ", i);
 		print_bar(load, bar_width, load_color(load));
 		printf(" %6.1f%%\n", load);
 		printed_rows++;
 	}
-	for (unsigned int i = 0; i < current->domain_count; i++)
-		tgbs_percent += current->domains[i].cpu_percent;
 	if (current->cpu_count > 0) {
+		/* /proc/stat is tick based while cgroup cpu.stat has finer-grained
+		 * accounting.  In particular around a cpuset migration, the latter
+		 * can temporarily report more work over the sampling window.  Use the
+		 * larger busy value as the aggregate baseline so that clamping OTHER
+		 * cannot make TGBS + OTHER + IDLE exceed the available CPU capacity. */
 		other_percent = all_busy - tgbs_percent;
 		if (other_percent < 0.0)
 			other_percent = 0.0;
-		idle_percent = 100.0 * current->cpu_count - all_busy;
+		accounted_busy = all_busy > tgbs_percent ? all_busy : tgbs_percent;
+		idle_percent = 100.0 * current->cpu_count - accounted_busy;
 		if (idle_percent < 0.0)
 			idle_percent = 0.0;
 		printf(" ALL    TGBS %5.1f%% (%4.2f CPU)  OTHER %5.1f%%  IDLE %5.1f%%",
