@@ -1,7 +1,7 @@
 /*
  * SPDX-License-Identifier: MIT
  *
- * tgbs-demo-top - a deliberately small top(1)-like monitor for TGBS.
+ * tgbs-top - a deliberately small top(1)-like monitor for TGBS.
  *
  * /run/tgbs selects cgroups owned by tgbsctl.  The cgroup v2 hierarchy and
  * /proc provide all measurements; the monitor never changes scheduler state.
@@ -917,13 +917,13 @@ int main(int argc, char **argv)
 		switch (option) {
 		case 'd':
 			if (parse_positive_double(optarg, &delay) != 0) {
-				fprintf(stderr, "tgbs-demo-top: invalid delay: %s\n", optarg);
+				fprintf(stderr, "tgbs-top: invalid delay: %s\n", optarg);
 				return 2;
 			}
 			break;
 		case 'n':
 			if (parse_positive_uint(optarg, &iterations) != 0) {
-				fprintf(stderr, "tgbs-demo-top: invalid iteration count: %s\n", optarg);
+				fprintf(stderr, "tgbs-top: invalid iteration count: %s\n", optarg);
 				return 2;
 			}
 			iterations_set = true;

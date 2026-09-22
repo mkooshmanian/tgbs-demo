@@ -9,7 +9,7 @@ workload in a compact, reproducible environment.
 
 The screenshot shows the complete QEMU demonstration:
 
-- `tgbs-demo-top` reports per-CPU occupation, TGBS domain budgets, and tasks;
+- `tgbs-top` reports per-CPU occupation, TGBS domain budgets, and tasks;
 - `tgbs-demo-mixed-timeline` plots RT response times against their deadlines;
 - `tgbs-fetch` provides a compact summary of the target system;
 - Chocolate Doom runs through Xvfb and is exposed over VNC.
@@ -23,7 +23,7 @@ The generated image includes the following commands:
 | `tgbsctl` | Create, inspect, update, freeze, and stop TGBS-managed cgroups. |
 | `tgbs-demo-doom` | Run Doom inside the `doom` domain with a configurable temporal CPU contract. |
 | `tgbs-demo-mixed` | Run the JSON-configured `mixed` domain containing FIFO RT tasks and FAIR background tasks. |
-| `tgbs-demo-top` | Display CPU usage for TGBS domains and their internal tasks. |
+| `tgbs-top` | Display CPU usage for TGBS domains and their internal tasks. |
 | `tgbs-demo-mixed-timeline` | Plot RT response times on a shared time window with terminal Braille graphics and automatic vertical scales. |
 | `tgbs-fetch` | Display target, kernel, CPU, memory, uptime, and TGBS information. |
 
@@ -142,7 +142,7 @@ tgbs-demo-mixed start &
 Open two additional SSH sessions for the live monitors:
 
 ```sh
-tgbs-demo-top
+tgbs-top
 ```
 
 ```sh
