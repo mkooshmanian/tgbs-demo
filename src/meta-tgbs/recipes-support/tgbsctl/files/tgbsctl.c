@@ -472,6 +472,12 @@ static void cleanup_metadata(const char *name)
 			name, strerror(errno));
 }
 
+static void cleanup_run(const char *name)
+{
+	cleanup_cgroup(name);
+	cleanup_metadata(name);
+}
+
 /* Write "PID STARTTIME" atomically: temp file then rename. */
 static int write_meta(const char *tmp, pid_t pid, unsigned long long starttime)
 {
@@ -588,20 +594,30 @@ int cmd_run(int argc, char **argv)
 	verify_cgroup_env();
 
 	snprintf(name_path, sizeof(name_path), "%s/%s", CG_ROOT, name);
-	if (mkdir(name_path, 0755) != 0 && errno != EEXIST)
+	if (mkdir(name_path, 0755) != 0) {
+		if (errno == EEXIST)
+			error_exit("TGBS domain %s already exists", name);
 		error_exit("unable to create cgroup %s: %s", name_path, strerror(errno));
+	}
 
 	snprintf(meta_path, sizeof(meta_path), "%s/%s", RUN_ROOT, name);
-	if (mkdir(meta_path, 0755) != 0 && errno != EEXIST)
-		error_exit("unable to create metadata for %s: %s", name_path, strerror(errno));
+	if (mkdir(meta_path, 0755) != 0) {
+		int saved_errno = errno;
+
+		cleanup_cgroup(name);
+		errno = saved_errno;
+		if (errno == EEXIST)
+			error_exit("metadata for TGBS domain %s already exists", name);
+		error_exit("unable to create metadata for %s: %s", meta_path,
+			strerror(errno));
+	}
 	snprintf(main_pid_path, sizeof(main_pid_path), "%s/main.pid", meta_path);
 
 	/* Configure placement while the group's runtime is still zero, so the
 	 * kernel performs bandwidth admission against the final active CPU set. */
 	if (cpu_list != NULL && configure_domain_cpus(name, cpu_list) != 0) {
 		int saved_errno = errno;
-		cleanup_cgroup(name);
-		cleanup_metadata(name);
+		cleanup_run(name);
 		errno = saved_errno;
 		error_exit("unable to set cpuset.cpus for %s to '%s': %s",
 			name, cpu_list, strerror(errno));
@@ -610,22 +626,37 @@ int cmd_run(int argc, char **argv)
 	/* Configure the temporal contract before any task enters the cgroup. */
 	char cfg_path[PATH_MAX];
 	snprintf(cfg_path, sizeof(cfg_path), "%s/cpu.period_us", name_path);
-	if (write_u64(cfg_path, period_us) != 0)
+	if (write_u64(cfg_path, period_us) != 0) {
+		int saved_errno = errno;
+		cleanup_run(name);
+		errno = saved_errno;
 		error_exit("unable to set cpu.period_us on %s: %s", cfg_path, strerror(errno));
+	}
 	snprintf(cfg_path, sizeof(cfg_path), "%s/cpu.runtime_us", name_path);
-	if (write_u64(cfg_path, runtime_us) != 0)
+	if (write_u64(cfg_path, runtime_us) != 0) {
+		int saved_errno = errno;
+		cleanup_run(name);
+		errno = saved_errno;
 		error_exit("unable to set cpu.runtime_us on %s: %s", cfg_path, strerror(errno));
+	}
 	snprintf(cfg_path, sizeof(cfg_path), "%s/cpu.period_us", name_path);
-	if (read_u64(cfg_path, &period_us) != 0)
+	if (read_u64(cfg_path, &period_us) != 0) {
+		int saved_errno = errno;
+		cleanup_run(name);
+		errno = saved_errno;
 		error_exit("unable to verify cpu.period_us on %s", cfg_path);
+	}
 	snprintf(cfg_path, sizeof(cfg_path), "%s/cpu.runtime_us", name_path);
-	if (read_u64(cfg_path, &runtime_us) != 0)
+	if (read_u64(cfg_path, &runtime_us) != 0) {
+		int saved_errno = errno;
+		cleanup_run(name);
+		errno = saved_errno;
 		error_exit("unable to verify cpu.runtime_us on %s", cfg_path);
+	}
 
 	if (reclaim_set && configure_domain_reclaim(name, reclaim) != 0) {
 		int saved_errno = errno;
-		cleanup_cgroup(name);
-		cleanup_metadata(name);
+		cleanup_run(name);
 		errno = saved_errno;
 		error_exit("unable to set cpu.reclaim for %s: %s", name, strerror(errno));
 	}
@@ -638,8 +669,12 @@ int cmd_run(int argc, char **argv)
 	sigaction(SIGHUP, &sa, NULL);
 
 	pid = fork();
-	if (pid < 0)
+	if (pid < 0) {
+		int saved_errno = errno;
+		cleanup_run(name);
+		errno = saved_errno;
 		error_exit("fork failed: %s", strerror(errno));
+	}
 
 	if (pid == 0) {
 		/* Child: pause immediately so the parent can move us before we run. */
@@ -651,17 +686,30 @@ int cmd_run(int argc, char **argv)
 	}
 
 	/* Parent: wait for the stop, then move the child into the cgroup. */
-	if (waitpid(pid, &status, WUNTRACED) < 0)
+	if (waitpid(pid, &status, WUNTRACED) < 0) {
+		int saved_errno = errno;
+		kill(pid, SIGKILL);
+		waitpid(pid, &status, 0);
+		cleanup_run(name);
+		errno = saved_errno;
 		error_exit("waitpid failed: %s", strerror(errno));
-	if (!WIFSTOPPED(status))
+	}
+	if (!WIFSTOPPED(status)) {
+		kill(pid, SIGKILL);
+		waitpid(pid, &status, 0);
+		cleanup_run(name);
 		error_exit("child did not pause as expected");
+	}
 
 	snprintf(cfg_path, sizeof(cfg_path), "%s/cgroup.procs", name_path);
 	if (write_u64(cfg_path, (unsigned long long) pid) != 0) {
+		int saved_errno = errno;
+
 		/* Child is stuck paused; kill it before bailing out. */
 		kill(pid, SIGKILL);
 		waitpid(pid, &status, 0);
-		cleanup_cgroup(name);
+		cleanup_run(name);
+		errno = saved_errno;
 		error_exit("unable to move child into %s: %s", cfg_path, strerror(errno));
 	}
 
@@ -671,24 +719,23 @@ int cmd_run(int argc, char **argv)
 	/* Record the main process identity (pid + /proc starttime) so that
 	 * list/inspect can verify it is really the same process after PID reuse. */
 	if (read_starttime(pid, &starttime) != 0) {
-		cleanup_cgroup(name);
-		cleanup_metadata(name);
+		cleanup_run(name);
 		error_exit("unable to read starttime for %d", pid);
 	}
 	snprintf(tmp_path, sizeof(tmp_path), "%s/main.pid.tmp", meta_path);
 	if (write_meta(tmp_path, pid, starttime) != 0) {
-		cleanup_cgroup(name);
-		cleanup_metadata(name);
+		cleanup_run(name);
 		error_exit("unable to write metadata for %s", name);
 	}
 	if (rename(tmp_path, main_pid_path) != 0) {
-		cleanup_cgroup(name);
-		cleanup_metadata(name);
+		cleanup_run(name);
 		error_exit("unable to finalize metadata for %s", name);
 	}
 
 	if (waitpid(pid, &status, 0) < 0) {
-		cleanup_cgroup(name);
+		int saved_errno = errno;
+		cleanup_run(name);
+		errno = saved_errno;
 		error_exit("waitpid failed: %s", strerror(errno));
 	}
 
@@ -697,27 +744,24 @@ int cmd_run(int argc, char **argv)
 		int sig = g_signal;
 		cgroup_kill(name);
 		printf("tgbsctl: interrupted by signal %d, cgroup %s torn down\n", sig, name);
-		cleanup_cgroup(name);
+		cleanup_run(name);
 		return 128 + sig;
 	}
 
 	if (WIFEXITED(status)) {
 		int rc = WEXITSTATUS(status);
 		printf("tgbsctl: command exited with code %d\n", rc);
-		cleanup_cgroup(name);
-		cleanup_metadata(name);
+		cleanup_run(name);
 		return rc;
 	}
 	if (WIFSIGNALED(status)) {
 		int sig = WTERMSIG(status);
 		printf("tgbsctl: command killed by signal %d\n", sig);
-		cleanup_cgroup(name);
-		cleanup_metadata(name);
+		cleanup_run(name);
 		return 128 + sig;
 	}
 
-	cleanup_cgroup(name);
-	cleanup_metadata(name);
+	cleanup_run(name);
 	return 1;
 }
 
