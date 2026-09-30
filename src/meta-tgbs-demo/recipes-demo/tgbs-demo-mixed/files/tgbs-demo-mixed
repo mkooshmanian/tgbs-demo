@@ -105,12 +105,12 @@ start()
     echo "  period:   ${period_us} us"
     echo "  cpus:     ${cpus}"
 
-    exec tgbsctl run \
+    tgbsctl run \
         --name "${DOMAIN}" \
         --runtime-us "${runtime_us}" \
         --period-us "${period_us}" \
         --cpus "${cpus}" \
-        "${ENTRYPOINT}" "${config}"
+        "${ENTRYPOINT}" "${config}" &
 }
 
 stop()

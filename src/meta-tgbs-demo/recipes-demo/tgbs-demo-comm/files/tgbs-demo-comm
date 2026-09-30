@@ -1,0 +1,165 @@
+#!/bin/sh
+
+set -eu
+
+DOMAIN_A="comm-a"
+DOMAIN_B="comm-b"
+CHANNEL_A_TO_B="comm-a-to-b"
+CHANNEL_B_TO_A="comm-b-to-a"
+ENTRYPOINT="/usr/libexec/tgbs-demo/comm-node"
+LOG_DIR="/var/log/tgbs-demo"
+LOG_A="${LOG_DIR}/comm-a.log"
+LOG_B="${LOG_DIR}/comm-b.log"
+
+RUNTIME_US=10000
+PERIOD_US=100000
+CPUS="0"
+MAX_MESSAGE_SIZE=128
+
+usage()
+{
+    cat <<EOF
+Usage:
+  tgbs-demo-comm start
+  tgbs-demo-comm stop
+  tgbs-demo-comm logs
+
+Logs:
+  ${LOG_A}
+  ${LOG_B}
+EOF
+}
+
+channel_exists()
+{
+    tgbsctl channel inspect "$1" >/dev/null 2>&1
+}
+
+domain_exists()
+{
+    tgbsctl inspect "$1" >/dev/null 2>&1
+}
+
+delete_channel()
+{
+    if channel_exists "$1"; then
+        tgbsctl channel delete "$1"
+    fi
+}
+
+wait_for_domains_to_stop()
+{
+    count=0
+    while [ "${count}" -lt 50 ]; do
+        if ! domain_exists "${DOMAIN_A}" && ! domain_exists "${DOMAIN_B}"; then
+            return 0
+        fi
+        count=$((count + 1))
+        sleep 0.1
+    done
+    return 1
+}
+
+start()
+{
+    if domain_exists "${DOMAIN_A}" || domain_exists "${DOMAIN_B}" ||
+       channel_exists "${CHANNEL_A_TO_B}" ||
+       channel_exists "${CHANNEL_B_TO_A}"; then
+        echo "tgbs-demo-comm: the demo is already active or was not cleaned up" >&2
+        echo "Run 'tgbs-demo-comm stop' before starting it again." >&2
+        return 1
+    fi
+
+    mkdir -p "${LOG_DIR}"
+    : > "${LOG_A}"
+    : > "${LOG_B}"
+
+    tgbsctl channel create \
+        --name "${CHANNEL_A_TO_B}" \
+        --source "${DOMAIN_A}" \
+        --destination "${DOMAIN_B}" \
+        --max-message-size "${MAX_MESSAGE_SIZE}"
+
+    if ! tgbsctl channel create \
+        --name "${CHANNEL_B_TO_A}" \
+        --source "${DOMAIN_B}" \
+        --destination "${DOMAIN_A}" \
+        --max-message-size "${MAX_MESSAGE_SIZE}"; then
+        tgbsctl channel delete "${CHANNEL_A_TO_B}" >/dev/null 2>&1 || true
+        return 1
+    fi
+
+    tgbsctl run \
+        --name "${DOMAIN_A}" \
+        --runtime-us "${RUNTIME_US}" \
+        --period-us "${PERIOD_US}" \
+        --cpus "${CPUS}" \
+        "${ENTRYPOINT}" initiator "${DOMAIN_A}" \
+        "${CHANNEL_B_TO_A}" "${CHANNEL_A_TO_B}" \
+        >>"${LOG_A}" 2>&1 &
+
+    tgbsctl run \
+        --name "${DOMAIN_B}" \
+        --runtime-us "${RUNTIME_US}" \
+        --period-us "${PERIOD_US}" \
+        --cpus "${CPUS}" \
+        "${ENTRYPOINT}" responder "${DOMAIN_B}" \
+        "${CHANNEL_A_TO_B}" "${CHANNEL_B_TO_A}" \
+        >>"${LOG_B}" 2>&1 &
+
+    echo "TGBS communication demo started in the background."
+    echo "Follow the exchanges with:"
+    echo "  tail -f ${LOG_A} ${LOG_B}"
+}
+
+stop()
+{
+    if domain_exists "${DOMAIN_A}"; then
+        tgbsctl kill "${DOMAIN_A}"
+    fi
+    if domain_exists "${DOMAIN_B}"; then
+        tgbsctl kill "${DOMAIN_B}"
+    fi
+
+    if ! wait_for_domains_to_stop; then
+        echo "tgbs-demo-comm: timed out waiting for domains to stop" >&2
+        return 1
+    fi
+
+    delete_channel "${CHANNEL_A_TO_B}"
+    delete_channel "${CHANNEL_B_TO_A}"
+    echo "TGBS communication demo stopped."
+}
+
+case "${1:-}" in
+    start)
+        [ "$#" -eq 1 ] || {
+            usage
+            exit 1
+        }
+        start
+        ;;
+    stop)
+        [ "$#" -eq 1 ] || {
+            usage
+            exit 1
+        }
+        stop
+        ;;
+    logs)
+        [ "$#" -eq 1 ] || {
+            usage
+            exit 1
+        }
+        mkdir -p "${LOG_DIR}"
+        touch "${LOG_A}" "${LOG_B}"
+        exec tail -f "${LOG_A}" "${LOG_B}"
+        ;;
+    help|-h|--help)
+        usage
+        ;;
+    *)
+        usage
+        exit 1
+        ;;
+esac

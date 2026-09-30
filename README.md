@@ -21,6 +21,7 @@ The generated image includes the following commands:
 | Command | Purpose |
 | --- | --- |
 | `tgbsctl` | Create, inspect, update, freeze, and stop TGBS-managed cgroups. |
+| `tgbs-demo-comm` | Run two TGBS domains exchanging messages over two unidirectional channels. |
 | `tgbs-demo-doom` | Run Doom inside the `doom` domain with a configurable temporal CPU contract. |
 | `tgbs-demo-mixed` | Run the JSON-configured `mixed` domain containing FIFO RT tasks and FAIR background tasks. |
 | `tgbs-top` | Display CPU usage for TGBS domains and their internal tasks. |
@@ -132,11 +133,12 @@ The demo image allows direct root login without a password.
 
 ### Running the demonstration
 
-After booting the target, start the two example domains from a control shell:
+After booting the target, start the example domains from a control shell.
+The commands launch their domains in the background:
 
 ```sh
-tgbs-demo-doom start &
-tgbs-demo-mixed start &
+tgbs-demo-doom start
+tgbs-demo-mixed start
 ```
 
 Open two additional SSH sessions for the live monitors:
@@ -162,6 +164,16 @@ To view Doom, connect a VNC client to `localhost:5900` for QEMU or to
 `192.168.10.2:5900` for the default Zybo Z7 configuration. The VNC endpoint
 has no password and is intended only for the isolated demonstration network.
 
+Start the bidirectional communication example and follow both domain logs with:
+
+```sh
+tgbs-demo-comm start
+tail -f /var/log/tgbs-demo/comm-a.log /var/log/tgbs-demo/comm-b.log
+```
+
+This creates `comm-a-to-b` and `comm-b-to-a`, then starts one domain at
+each end. `tgbs-demo-comm logs` is a shortcut for the `tail -f` command.
+
 The contracts can be changed while the workloads are running. For example:
 
 ```sh
@@ -185,6 +197,7 @@ Stop the workloads with:
 ```sh
 tgbs-demo-doom stop
 tgbs-demo-mixed stop
+tgbs-demo-comm stop
 ```
 
 ### SSH access

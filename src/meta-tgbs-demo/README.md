@@ -15,6 +15,28 @@ It reports the host, distribution, kernel, architecture, CPU, memory, uptime,
 TGBS availability, and number of active TGBS domains. Use `--no-color` or set
 `NO_COLOR` for plain output.
 
+## Communication channels
+
+`tgbs-demo-comm` creates two domains and two unidirectional channels:
+
+```text
+comm-a --comm-a-to-b--> comm-b
+comm-a <--comm-b-to-a-- comm-b
+```
+
+The initiator sends one ping per second and the responder returns a pong. Both
+domains run in the background and write separately to
+`/var/log/tgbs-demo/comm-a.log` and `comm-b.log`:
+
+```sh
+tgbs-demo-comm start
+tgbs-demo-comm logs
+tgbs-demo-comm stop
+```
+
+`logs` follows both files with `tail -f`. The `stop` command stops the two
+domains before deleting their channels.
+
 ## Mixed RT timeline
 
 `tgbs-demo-mixed-timeline` displays the response time of every periodic RT task

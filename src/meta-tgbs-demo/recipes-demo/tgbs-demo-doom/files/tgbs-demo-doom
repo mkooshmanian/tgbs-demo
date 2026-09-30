@@ -46,7 +46,7 @@ start()
         --period-us "${DEFAULT_PERIOD_US}" \
         --cpus "${DEFAULT_CPUS}" \
         --reclaim "${DEFAULT_RECLAIM}" \
-        "${ENTRYPOINT}"
+        "${ENTRYPOINT}" &
 }
 
 stop()
