@@ -11,12 +11,15 @@
 # Default-Stop:      0 6
 # Short-Description: Mount cgroup v2 and enable cpu and cpuset for TGBS.
 # Description:       Prepare the cgroup v2 hierarchy at /sys/fs/cgroup so that
-#                    TGBS can create and place task groups under the root. Does
+#                    TGBS can create and place task groups under the root, and
+#                    initialize the volatile communication-channel store. Does
 #                    not create any subgroup or modify a temporal contract.
 ### END INIT INFO
 
 CG_ROOT=/sys/fs/cgroup
 RUN_ROOT=/run/tgbs
+CHANNEL_ROOT=$RUN_ROOT/channels
+CHANNEL_TOPOLOGY_LOCK=$RUN_ROOT/.channel-topology.lock
 
 case "${1:-start}" in
 	start|restart|force-reload)
@@ -40,6 +43,10 @@ fi
 
 mkdir -p "$CG_ROOT"
 mkdir -p "$RUN_ROOT"
+mkdir -p "$CHANNEL_ROOT"
+touch "$CHANNEL_TOPOLOGY_LOCK"
+chmod 0755 "$CHANNEL_ROOT"
+chmod 0600 "$CHANNEL_TOPOLOGY_LOCK"
 
 # Three cases for /sys/fs/cgroup:
 #  - nothing mounted there: mount cgroup2;

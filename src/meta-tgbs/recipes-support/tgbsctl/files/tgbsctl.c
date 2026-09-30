@@ -6,13 +6,15 @@
  * The "run" command creates a TGBS cgroup directly under /sys/fs/cgroup,
  * configures its temporal contract, and starts a command inside it. A volatile
  * marker under /run/tgbs records the main process identity so that "list" and
- * "inspect" can correlate userspace processes with their TGBS cgroup.
+ * "inspect" can correlate userspace processes with their TGBS cgroup. The
+ * channel commands manage immutable communication contracts below
+ * /run/tgbs/channels.
  *
  * The cgroup lifetime is tied to the main process. When it exits, tgbsctl
  * terminates any remaining tasks, then removes the cgroup and its marker.
- * Observation is read-only and derives the current state from cgroupfs, /proc,
- * and the marker. Control commands act directly on cgroupfs; no daemon or
- * persistent state database is involved.
+ * Observation derives domain state from cgroupfs, /proc, and the marker.
+ * Control commands act directly on cgroupfs and the volatile channel store;
+ * no daemon or persistent state database is involved.
  */
 
 #define _GNU_SOURCE
@@ -50,6 +52,11 @@ void usage(const char *prog)
 		"  %s set NAME period VALUE_US\n"
 		"  %s set NAME cpus CPU-LIST|inherit\n"
 		"  %s set NAME reclaim 0|1|false|true\n"
+		"  %s channel create --name NAME --source DOMAIN --destination DOMAIN\n"
+		"         --max-message-size BYTES\n"
+		"  %s channel list\n"
+		"  %s channel inspect NAME\n"
+		"  %s channel delete NAME\n"
 		"\n"
 		"Commands:\n"
 		"  run      Run COMMAND in a TGBS cgroup named NAME under %s.\n"
@@ -64,15 +71,18 @@ void usage(const char *prog)
 		"  kill     Kill every process in NAME. The run supervisor then cleans up.\n"
 		"  pause    Freeze every process in NAME.\n"
 		"  resume   Unfreeze every process in NAME.\n"
-		"  set      Change one value of NAME's temporal contract.\n",
-		prog, prog, prog, prog, prog, prog, prog, prog, prog, prog, CG_ROOT);
+		"  set      Change one value of NAME's temporal contract.\n"
+		"  channel  Manage immutable inter-container channel contracts.\n",
+		prog, prog, prog, prog, prog, prog, prog, prog, prog, prog,
+		prog, prog, prog, prog, CG_ROOT);
 }
 
 int is_valid_name(const char *name)
 {
 	size_t i;
 
-	if (name == NULL || name[0] == '\0' || strlen(name) > 255)
+	if (name == NULL || name[0] == '\0' || strlen(name) > 255 ||
+	    strcmp(name, ".") == 0 || strcmp(name, "..") == 0)
 		return 0;
 	for (i = 0; name[i] != '\0'; i++) {
 		char c = name[i];
@@ -521,6 +531,7 @@ int cmd_run(int argc, char **argv)
 	unsigned long long starttime = 0;
 	int status;
 	struct sigaction sa;
+	int topology_fd = -1;
 
 	/* The 'run' subcommand is argv[1]; options follow it. Start getopt at
 	 * argv[2] so 'run' is skipped; the command is whatever getopt leaves at
@@ -591,8 +602,23 @@ int cmd_run(int argc, char **argv)
 	if (runtime_us > period_us)
 		error_exit("--runtime-us must be <= --period-us");
 
+	if (strcmp(name, "channels") == 0)
+		error_exit("the domain name 'channels' is reserved by the runtime");
+
 	verify_cgroup_env();
 
+	/* Keep the topology stable until the child has entered its cgroup. */
+	topology_fd = channel_topology_lock(0);
+	if (topology_fd < 0)
+		error_exit("unable to lock the channel topology: %s", strerror(errno));
+	if (channel_validate_domain(name) != 0) {
+		int saved_errno = errno;
+
+		channel_topology_unlock(topology_fd);
+		errno = saved_errno;
+		error_exit("invalid channel contract for domain %s: %s",
+			name, strerror(errno));
+	}
 	snprintf(name_path, sizeof(name_path), "%s/%s", CG_ROOT, name);
 	if (mkdir(name_path, 0755) != 0) {
 		if (errno == EEXIST)
@@ -677,6 +703,7 @@ int cmd_run(int argc, char **argv)
 	}
 
 	if (pid == 0) {
+		channel_topology_unlock(topology_fd);
 		/* Child: pause immediately so the parent can move us before we run. */
 		raise(SIGSTOP);
 		execvp(argv[cmd_index], &argv[cmd_index]);
@@ -712,6 +739,9 @@ int cmd_run(int argc, char **argv)
 		errno = saved_errno;
 		error_exit("unable to move child into %s: %s", cfg_path, strerror(errno));
 	}
+
+	channel_topology_unlock(topology_fd);
+	topology_fd = -1;
 
 	/* Resume: the child now execs inside the TGBS cgroup. */
 	kill(pid, SIGCONT);
@@ -809,6 +839,8 @@ int main(int argc, char **argv)
 		}
 		return cmd_set(argv[2], argv[3], argv[4]);
 	}
+	if (strcmp(argv[1], "channel") == 0)
+		return cmd_channel(argc, argv);
 
 	usage(argv[0]);
 	return 2;

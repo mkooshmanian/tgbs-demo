@@ -44,6 +44,90 @@ bandwidth admission test transactionally. Dynamic placement changes must
 therefore keep the sum of overlapping reservations within the configured
 DEADLINE bandwidth limit.
 
+## Communication channels
+
+`tgbsctl` manages immutable, unidirectional channel contracts independently
+from TGBS domains:
+
+```sh
+tgbsctl channel create \
+    --name command \
+    --source producer \
+    --destination consumer \
+    --max-message-size 256
+
+tgbsctl channel list
+tgbsctl channel inspect command
+tgbsctl channel delete command
+```
+
+Channels must be created before their participating domains are started. Each
+creation gets a unique generation, so deleting and recreating the same name
+still produces a distinct channel instance. The runtime layout is:
+
+```text
+/run/tgbs/channels/NAME/
+├── contract                 # root-owned, mode 0444
+├── lifetime.lock
+└── endpoint/
+    ├── source.lock
+    ├── receiver.lock
+    └── channel.sock         # present while the destination is open
+```
+
+The contract records the name, generation, source, destination, and
+`max_message_size`. There is no in-place update command: changing these
+values requires deleting and recreating the channel. The channel directory is
+mode `0555`, but this is not intended to prevent the trusted host
+administrator from changing it manually.
+
+Every library handle holds a shared `lifetime.lock`; deletion requires its
+exclusive lock and is therefore refused while a handle is open. Deletion is
+also refused while either participant cgroup is populated. Creation, deletion,
+and participant startup share a topology lock so that these checks cannot race.
+
+`libtgbscomm` provides the application data path:
+
+```c
+#include <tgbs/channel.h>
+
+tgbs_channel_t *rx;
+unsigned char message[256];
+size_t length;
+
+if (tgbs_channel_open("command", TGBS_CHANNEL_DESTINATION, &rx) == -1)
+        /* handle errno */;
+
+if (tgbs_channel_receive(rx, message, sizeof(message), &length) == -1)
+        /* handle errno */;
+
+tgbs_channel_close(rx);
+```
+
+The source takes the exclusive `source.lock` and uses an unnamed AF_UNIX
+`SOCK_DGRAM` socket. The destination takes the exclusive `receiver.lock`
+and binds `channel.sock`; a second open for the same direction fails with
+`EADDRINUSE`. A stale socket left by a crashed destination is removed only
+after acquiring `receiver.lock`. The source may open before the destination,
+but sends fail until `channel.sock` exists.
+
+Each successful send is one complete, nonempty message. The library caches and
+enforces `max_message_size` when the handle is opened. A receive buffer that
+is too small consumes the datagram and returns `EMSGSIZE` together with its
+original size. The underlying file descriptor is available through
+`tgbs_channel_fd()` for use with `poll()`/`epoll()`.
+
+AF_UNIX does not provide a per-socket limit or an exact status counter in
+messages. Consequently the first version deliberately has no
+`max_nb_message` contract. `tgbs_channel_get_status()` reports only whether
+a message is pending and the size of the next message.
+
+The endpoint locks enforce one cooperative `libtgbscomm` source and one
+destination; they cannot constrain a program that bypasses the library.
+Until mount-namespace support exposes only the appropriate paths to each
+container, direction and exclusivity are runtime properties rather than a
+security boundary. No credential passing or `SO_PASSCRED` is used.
+
 ## Runtime monitor
 
 `tgbs-top` is a lightweight interactive CPU monitor limited to domains managed

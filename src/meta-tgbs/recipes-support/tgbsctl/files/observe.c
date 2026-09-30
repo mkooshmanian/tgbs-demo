@@ -2,8 +2,8 @@
  * tgbsctl list / inspect -- read-only observation of active TGBS domains.
  *
  * cgroupfs under CG_ROOT is the single source of truth for resource and task
- * state. /run/tgbs only holds a volatile ownership marker (main.pid) that the
- * kernel cannot rebuild. Nothing here mutates the system.
+ * state. Domain directories below /run/tgbs hold volatile main.pid markers.
+ * The separate channels subtree is ignored here. Nothing mutates the system.
  */
 
 #include "tgbsctl.h"
@@ -98,6 +98,7 @@ static int read_procs(const char *name, char *out, size_t outsz)
 			used += len;
 		}
 	}
+	close(fd);
 	return 0;
 }
 
@@ -349,6 +350,8 @@ int cmd_list(void)
 	struct dirent *ent;
 	while ((ent = readdir(dir)) != NULL) {
 		if (ent->d_name[0] == '.')
+			continue;
+		if (strcmp(ent->d_name, "channels") == 0)
 			continue;
 
 		pid_t pid = 0;

@@ -2,8 +2,9 @@
  * Shared declarations for tgbsctl.
  *
  * cgroupfs under CG_ROOT is the single source of truth for resource and task
- * state. RUN_ROOT only holds a volatile userspace ownership marker (main.pid)
- * that the kernel cannot rebuild: the forked leader PID plus its /proc
+ * state. RUN_ROOT holds volatile domain ownership markers and immutable
+ * communication-channel contracts. A main.pid marker records information the
+ * kernel cannot rebuild: the forked leader PID plus its /proc
  * starttime, used to verify the main process identity across PID reuse.
  */
 
@@ -23,6 +24,12 @@
 #endif
 
 #define CPU_LIST_SIZE 4096
+#ifndef CHANNEL_ROOT
+#define CHANNEL_ROOT RUN_ROOT "/channels"
+#endif
+
+#define CHANNEL_TOPOLOGY_LOCK RUN_ROOT "/.channel-topology.lock"
+#define CHANNEL_NAME_SIZE 64
 
 /* Derived domain state. Never stored; recomputed from cgroupfs and /proc. */
 enum domain_state {
@@ -78,6 +85,18 @@ int cmd_inspect(const char *name);
 int cmd_kill(const char *name);
 int cmd_freeze(const char *name, int freeze);
 int cmd_set(const char *name, const char *field, const char *value_text);
+int cmd_channel(int argc, char **argv);
+
+/* --- channel topology helpers defined in channel.c --- */
+
+/* Serialize channel topology changes with domain startup. The returned file
+ * descriptor owns the lock and must be closed with channel_topology_unlock(). */
+int channel_topology_lock(int exclusive);
+void channel_topology_unlock(int fd);
+
+/* Validate every channel contract attached to DOMAIN while the topology lock
+ * is held. */
+int channel_validate_domain(const char *domain);
 
 /* --- observe helpers defined in observe.c (read-only) --- */
 
