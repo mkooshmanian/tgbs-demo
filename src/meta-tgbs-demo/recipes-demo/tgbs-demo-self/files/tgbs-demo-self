@@ -1,0 +1,52 @@
+#!/bin/sh
+
+set -eu
+
+DOMAIN="self"
+ENTRYPOINT="/usr/libexec/tgbs-demo/self-entrypoint"
+
+RUNTIME_US=50000
+PERIOD_US=100000
+CPUS="0"
+
+usage()
+{
+    cat <<EOF
+Usage:
+  tgbs-demo-self start
+
+Open an interactive shell inside the '${DOMAIN}' TGBS domain.
+Leave the container and remove its domain with 'exit' or Ctrl-D.
+
+TGBS contract:
+  runtime:  ${RUNTIME_US} us
+  period:   ${PERIOD_US} us
+  cpus:     ${CPUS}
+EOF
+}
+
+case "${1:-}" in
+    start)
+        [ "$#" -eq 1 ] || {
+            usage
+            exit 1
+        }
+
+        echo "Entering the '${DOMAIN}' TGBS container."
+        exec tgbsctl run \
+            --name "${DOMAIN}" \
+            --runtime-us "${RUNTIME_US}" \
+            --period-us "${PERIOD_US}" \
+            --cpus "${CPUS}" \
+            "${ENTRYPOINT}"
+        ;;
+
+    help|-h|--help)
+        usage
+        ;;
+
+    *)
+        usage
+        exit 1
+        ;;
+esac

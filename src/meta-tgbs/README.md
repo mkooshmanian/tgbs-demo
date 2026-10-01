@@ -32,6 +32,13 @@ tgbsctl set worker cpus inherit
 tgbsctl set worker reclaim true
 ```
 
+`run` uses `clone3(CLONE_INTO_CGROUP)` to create the command directly in its
+configured TGBS cgroup and as PID 1 in new PID, mount, UTS, and IPC namespaces.
+The mount namespace initially shares the host root filesystem, then makes its
+mount propagation private and mounts a new `procfs` on `/proc` for the
+container's PID namespace. Other paths, including `/run/tgbs`, still expose
+the same underlying filesystem at this stage.
+
 CPU placement uses the standard `cpuset.cpus` CPU-list syntax. `inherit`
 restores the cgroup root's current effective CPU list; this works for populated
 domains, for which the kernel may reject an empty `cpuset.cpus`. Boolean reclaim

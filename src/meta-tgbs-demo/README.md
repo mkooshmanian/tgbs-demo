@@ -15,6 +15,18 @@ It reports the host, distribution, kernel, architecture, CPU, memory, uptime,
 TGBS availability, and number of active TGBS domains. Use `--no-color` or set
 `NO_COLOR` for plain output.
 
+## Interactive container
+
+`tgbs-demo-self` opens an interactive shell as PID 1 in an isolated PID,
+mount, UTS, and IPC namespace set and in the `self` TGBS domain:
+
+```sh
+tgbs-demo-self start
+```
+
+The shell displays its cgroup and namespace identifiers on entry. Type `exit`
+or press Ctrl-D to leave it; `tgbsctl` then removes the domain.
+
 ## Communication channels
 
 `tgbs-demo-comm` creates two domains and two unidirectional channels:

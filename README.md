@@ -24,6 +24,7 @@ The generated image includes the following commands:
 | `tgbs-demo-comm` | Run two TGBS domains exchanging messages over two unidirectional channels. |
 | `tgbs-demo-doom` | Run Doom inside the `doom` domain with a configurable temporal CPU contract. |
 | `tgbs-demo-mixed` | Run the JSON-configured `mixed` domain containing FIFO RT tasks and FAIR background tasks. |
+| `tgbs-demo-self` | Open an interactive shell as PID 1 inside a namespaced TGBS domain. |
 | `tgbs-top` | Display CPU usage for TGBS domains and their internal tasks. |
 | `tgbs-demo-mixed-timeline` | Plot RT response times on a shared time window with terminal Braille graphics and automatic vertical scales. |
 | `tgbs-fetch` | Display target, kernel, CPU, memory, uptime, and TGBS information. |
@@ -132,6 +133,16 @@ runqemu qemuarm32 slirp nographic
 The demo image allows direct root login without a password.
 
 ### Running the demonstration
+
+To enter an interactive container and inspect its PID, cgroup and namespaces,
+run:
+
+```sh
+tgbs-demo-self start
+```
+
+The shell remains attached to the current terminal. Type `exit` or press
+Ctrl-D to leave it and remove the `self` domain.
 
 After booting the target, start the example domains from a control shell.
 The commands launch their domains in the background:

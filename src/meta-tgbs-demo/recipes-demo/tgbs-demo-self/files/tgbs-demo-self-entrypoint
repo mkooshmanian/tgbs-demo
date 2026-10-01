@@ -1,0 +1,21 @@
+#!/bin/sh
+
+set -eu
+
+hostname tgbs-self
+
+echo
+echo "TGBS interactive container"
+echo "  hostname:   $(hostname)"
+echo "  PID:        $$"
+echo "  cgroup:     $(sed -n '1p' /proc/self/cgroup)"
+echo "  namespaces:"
+for namespace in pid mnt uts ipc; do
+    printf '    %-3s %s\n' "${namespace}" "$(readlink "/proc/self/ns/${namespace}")"
+done
+echo
+echo "Type 'exit' or press Ctrl-D to leave the container."
+echo
+
+export PS1='[tgbs-self]# '
+exec /bin/sh -i

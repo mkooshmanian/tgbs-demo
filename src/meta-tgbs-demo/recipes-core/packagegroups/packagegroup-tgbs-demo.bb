@@ -8,4 +8,5 @@ RDEPENDS:${PN} = " \
     tgbs-demo-doom \
     tgbs-demo-fetch \
     tgbs-demo-mixed \
+    tgbs-demo-self \
 "

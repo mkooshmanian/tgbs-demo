@@ -133,4 +133,4 @@ line "$blank" "Uptime" "$uptime"
 line "$blank" "TGBS" "$tgbs_status"
 line "$blank" "Domains" "$domain_count active"
 printf '%b%s%b\n\n' "$dim" \
-    'Commands: tgbsctl · tgbs-top · tgbs-demo-mixed-timeline' "$reset"
+    'Commands: tgbsctl · tgbs-top · tgbs-demo-self · tgbs-demo-mixed-timeline' "$reset"

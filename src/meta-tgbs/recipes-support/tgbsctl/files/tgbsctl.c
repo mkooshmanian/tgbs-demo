@@ -4,11 +4,11 @@
  * tgbsctl - minimal daemonless TGBS runtime and inspection tool
  *
  * The "run" command creates a TGBS cgroup directly under /sys/fs/cgroup,
- * configures its temporal contract, and starts a command inside it. A volatile
- * marker under /run/tgbs records the main process identity so that "list" and
- * "inspect" can correlate userspace processes with their TGBS cgroup. The
- * channel commands manage immutable communication contracts below
- * /run/tgbs/channels.
+ * configures its temporal contract, and starts a command as PID 1 inside new
+ * PID, mount, UTS, and IPC namespaces. A volatile marker under /run/tgbs
+ * records the main process identity so that "list" and "inspect" can correlate
+ * userspace processes with their TGBS cgroup. The channel commands manage
+ * immutable communication contracts below /run/tgbs/channels.
  *
  * The cgroup lifetime is tied to the main process. When it exits, tgbsctl
  * terminates any remaining tasks, then removes the cgroup and its marker.
@@ -31,7 +31,10 @@
 #include <limits.h>
 #include <getopt.h>
 #include <linux/magic.h>
+#include <linux/sched.h>
+#include <sys/mount.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <sys/vfs.h>
 #include <sys/types.h>
 
@@ -59,7 +62,8 @@ void usage(const char *prog)
 		"  %s channel delete NAME\n"
 		"\n"
 		"Commands:\n"
-		"  run      Run COMMAND in a TGBS cgroup named NAME under %s.\n"
+		"  run      Run COMMAND as PID 1 in isolated PID, mount, UTS, and IPC\n"
+		"           namespaces and in a TGBS cgroup named NAME under %s.\n"
 		"           Run options must follow 'run' and precede COMMAND.\n"
 		"           RUNTIME and PERIOD are in microseconds and must satisfy\n"
 		"           0 < RUNTIME <= PERIOD.\n"
@@ -407,6 +411,31 @@ static void signal_handler(int sig)
 	g_signal = sig;
 }
 
+static int setup_container_mounts(void)
+{
+	/* Keep mounts created by the container from propagating to the host. */
+	if (mount(NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL) != 0)
+		return -1;
+
+	/* Hide the inherited host procfs with one tied to this PID namespace. */
+	if (mount("proc", "/proc", "proc",
+			MS_NOSUID | MS_NOEXEC | MS_NODEV, NULL) != 0)
+		return -1;
+	return 0;
+}
+
+static pid_t clone_container_into_cgroup(int cgroup_fd)
+{
+	struct clone_args args = {
+		.flags = CLONE_INTO_CGROUP | CLONE_NEWPID | CLONE_NEWNS |
+			CLONE_NEWUTS | CLONE_NEWIPC,
+		.exit_signal = SIGCHLD,
+		.cgroup = (unsigned long long)cgroup_fd,
+	};
+
+	return (pid_t)syscall(SYS_clone3, &args, sizeof(args));
+}
+
 /* Terminate every remaining task inside the cgroup. */
 int cgroup_kill(const char *name)
 {
@@ -532,6 +561,7 @@ int cmd_run(int argc, char **argv)
 	int status;
 	struct sigaction sa;
 	int topology_fd = -1;
+	int cgroup_fd = -1;
 
 	/* The 'run' subcommand is argv[1]; options follow it. Start getopt at
 	 * argv[2] so 'run' is skipped; the command is whatever getopt leaves at
@@ -694,57 +724,47 @@ int cmd_run(int argc, char **argv)
 	sigaction(SIGTERM, &sa, NULL);
 	sigaction(SIGHUP, &sa, NULL);
 
-	pid = fork();
-	if (pid < 0) {
+	cgroup_fd = open(name_path, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+	if (cgroup_fd < 0) {
 		int saved_errno = errno;
+
 		cleanup_run(name);
 		errno = saved_errno;
-		error_exit("fork failed: %s", strerror(errno));
+		error_exit("unable to open cgroup %s: %s", name_path, strerror(errno));
+	}
+
+	/* Create PID 1 directly in the configured TGBS cgroup and in its new
+	 * namespaces. The supervisor remains in the host namespaces and receives
+	 * the child's host PID. */
+	pid = clone_container_into_cgroup(cgroup_fd);
+	if (pid < 0) {
+		int saved_errno = errno;
+
+		close(cgroup_fd);
+		cleanup_run(name);
+		errno = saved_errno;
+		error_exit("clone3 into cgroup %s failed: %s", name_path,
+			strerror(errno));
 	}
 
 	if (pid == 0) {
+		close(cgroup_fd);
 		channel_topology_unlock(topology_fd);
-		/* Child: pause immediately so the parent can move us before we run. */
-		raise(SIGSTOP);
+		if (setup_container_mounts() != 0) {
+			fprintf(stderr,
+				"tgbsctl: ERROR - unable to prepare container mounts: %s\n",
+				strerror(errno));
+			_exit(127);
+		}
 		execvp(argv[cmd_index], &argv[cmd_index]);
 		fprintf(stderr, "tgbsctl: ERROR - failed to execute '%s': %s\n",
 			argv[cmd_index], strerror(errno));
 		_exit(127);
 	}
 
-	/* Parent: wait for the stop, then move the child into the cgroup. */
-	if (waitpid(pid, &status, WUNTRACED) < 0) {
-		int saved_errno = errno;
-		kill(pid, SIGKILL);
-		waitpid(pid, &status, 0);
-		cleanup_run(name);
-		errno = saved_errno;
-		error_exit("waitpid failed: %s", strerror(errno));
-	}
-	if (!WIFSTOPPED(status)) {
-		kill(pid, SIGKILL);
-		waitpid(pid, &status, 0);
-		cleanup_run(name);
-		error_exit("child did not pause as expected");
-	}
-
-	snprintf(cfg_path, sizeof(cfg_path), "%s/cgroup.procs", name_path);
-	if (write_u64(cfg_path, (unsigned long long) pid) != 0) {
-		int saved_errno = errno;
-
-		/* Child is stuck paused; kill it before bailing out. */
-		kill(pid, SIGKILL);
-		waitpid(pid, &status, 0);
-		cleanup_run(name);
-		errno = saved_errno;
-		error_exit("unable to move child into %s: %s", cfg_path, strerror(errno));
-	}
-
+	close(cgroup_fd);
 	channel_topology_unlock(topology_fd);
 	topology_fd = -1;
-
-	/* Resume: the child now execs inside the TGBS cgroup. */
-	kill(pid, SIGCONT);
 
 	/* Record the main process identity (pid + /proc starttime) so that
 	 * list/inspect can verify it is really the same process after PID reuse. */
