@@ -43,13 +43,13 @@ enum domain_state {
 };
 
 enum channel_mount_role {
-	CHANNEL_MOUNT_SOURCE = 1,
-	CHANNEL_MOUNT_DESTINATION = 2
+	CHANNEL_MOUNT_SOURCE = 1U << 0,
+	CHANNEL_MOUNT_DESTINATION = 1U << 1
 };
 
 struct channel_mount_entry {
 	char name[CHANNEL_NAME_SIZE];
-	enum channel_mount_role role;
+	unsigned int roles;
 	int channel_fd;
 	int endpoint_fd;
 	int source_lock_fd;

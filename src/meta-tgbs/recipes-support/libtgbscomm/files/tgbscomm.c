@@ -186,7 +186,6 @@ static int read_contract(const char *name, struct channel_contract *contract)
 	    !valid_name(contract->name) ||
 	    !valid_name(contract->source) ||
 	    !valid_name(contract->destination) ||
-	    strcmp(contract->source, contract->destination) == 0 ||
 	    contract->max_message_size > (unsigned long long)(INT_MAX - 32)) {
 		errno = EINVAL;
 		return -1;

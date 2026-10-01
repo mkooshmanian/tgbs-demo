@@ -44,7 +44,9 @@ destination matches the domain. Contracts and lifetime locks are read-only.
 For a source, `source.lock` is writable while the endpoint directory is
 read-only; for a destination, the endpoint and `receiver.lock` are writable
 while `source.lock` is read-only. Both views refer to the same underlying
-AF_UNIX socket directory.
+AF_UNIX socket directory. A domain may be both the source and destination of a
+channel; in that case both role-specific views are writable, allowing a local
+loopback channel without changing the application interface.
 
 CPU placement uses the standard `cpuset.cpus` CPU-list syntax. `inherit`
 restores the cgroup root's current effective CPU list; this works for populated

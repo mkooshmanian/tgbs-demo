@@ -180,7 +180,6 @@ static int read_contract(const char *name, struct channel_contract *contract)
 	    !is_valid_channel_name(contract->name) ||
 	    !is_valid_name(contract->source) ||
 	    !is_valid_name(contract->destination) ||
-	    strcmp(contract->source, contract->destination) == 0 ||
 	    contract->max_message_size > (unsigned long long)(INT_MAX - 32)) {
 		errno = EINVAL;
 		return -1;
@@ -457,11 +456,6 @@ static int create_channel(int argc, char **argv)
 	    strcmp(destination, "channels") == 0) {
 		fprintf(stderr,
 			"tgbsctl: ERROR - the domain name 'channels' is reserved\n");
-		return 2;
-	}
-	if (strcmp(source, destination) == 0) {
-		fprintf(stderr,
-			"tgbsctl: ERROR - source and destination must be different domains\n");
 		return 2;
 	}
 	if (max_message_size > (unsigned long long)(INT_MAX - 32)) {
@@ -794,10 +788,10 @@ int channel_mount_plan_prepare(const char *domain,
 			goto error;
 		}
 		if (strcmp(contract.source, domain) == 0)
-			mount_entry.role = CHANNEL_MOUNT_SOURCE;
-		else if (strcmp(contract.destination, domain) == 0)
-			mount_entry.role = CHANNEL_MOUNT_DESTINATION;
-		else
+			mount_entry.roles |= CHANNEL_MOUNT_SOURCE;
+		if (strcmp(contract.destination, domain) == 0)
+			mount_entry.roles |= CHANNEL_MOUNT_DESTINATION;
+		if (mount_entry.roles == 0)
 			continue;
 
 		snprintf(mount_entry.name, sizeof(mount_entry.name), "%s",
@@ -809,7 +803,7 @@ int channel_mount_plan_prepare(const char *domain,
 			SOURCE_LOCK);
 		if (mount_entry.source_lock_fd < 0)
 			goto entry_error;
-		if (mount_entry.role == CHANNEL_MOUNT_DESTINATION) {
+		if (mount_entry.roles & CHANNEL_MOUNT_DESTINATION) {
 			mount_entry.endpoint_fd = open_channel_mount_path(contract.name,
 				ENDPOINT_DIR);
 			if (mount_entry.endpoint_fd < 0)

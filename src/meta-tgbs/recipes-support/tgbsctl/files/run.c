@@ -112,31 +112,29 @@ static int setup_channel_mounts(const struct channel_mount_plan *plan)
 			return report_mount_error("unable to make channel read-only at",
 				target);
 
-		if (entry->role == CHANNEL_MOUNT_SOURCE) {
-			/* The source may lock source.lock and send to the socket, but
-			 * cannot create, replace, or remove the receiver endpoint. */
-			if (move_mount_to_path(entry->source_lock_fd, source_lock) != 0)
-				return report_mount_error("unable to expose source lock at",
-					source_lock);
-			if (remount_bind(source_lock, 0) != 0)
-				return report_mount_error("unable to make source lock writable at",
-					source_lock);
-		} else {
-			/* The destination owns the writable endpoint. Mask source.lock
-			 * with a read-only file mount so it cannot claim both roles. */
+		if (entry->roles & CHANNEL_MOUNT_DESTINATION) {
+			/* A destination owns the writable endpoint so it can create and
+			 * remove the receiver socket. */
 			if (move_mount_to_path(entry->endpoint_fd, endpoint) != 0)
 				return report_mount_error("unable to expose destination endpoint at",
 					endpoint);
 			if (remount_bind(endpoint, 0) != 0)
 				return report_mount_error("unable to make destination endpoint writable at",
 					endpoint);
-			if (move_mount_to_path(entry->source_lock_fd, source_lock) != 0)
-				return report_mount_error("unable to mask destination source lock at",
-					source_lock);
-			if (remount_bind(source_lock, 1) != 0)
-				return report_mount_error("unable to make destination source lock read-only at",
-					source_lock);
 		}
+
+		/* Every participant sees source.lock through an explicit file mount.
+		 * It is writable only when the domain also owns the source role. */
+		if (move_mount_to_path(entry->source_lock_fd, source_lock) != 0)
+			return report_mount_error("unable to expose source lock at",
+				source_lock);
+		if (remount_bind(source_lock,
+				!(entry->roles & CHANNEL_MOUNT_SOURCE)) != 0)
+			return report_mount_error(
+				(entry->roles & CHANNEL_MOUNT_SOURCE) ?
+				"unable to make source lock writable at" :
+				"unable to make source lock read-only at",
+				source_lock);
 	}
 	return 0;
 }
