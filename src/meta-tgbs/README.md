@@ -25,7 +25,7 @@ contract, CPU placement, resource limits, and optional DEADLINE bandwidth
 reclaim:
 
 ```sh
-tgbsctl run --name worker --runtime-us 20000 --period-us 100000 \
+tgbsctl run --name worker --hostname worker --runtime-us 20000 --period-us 100000 \
     --cpus 0 --reclaim false --memory-max 268435456 --pids-max 128 \
     /usr/bin/worker
 
@@ -42,6 +42,9 @@ namespaces. The root filesystem remains shared and writable, while mount
 propagation is private and `/proc`, `/tmp`, and `/run` are private mounts. The
 cgroup namespace makes the domain appear as `/` in `/proc/self/cgroup` and
 provides a read-only, domain-rooted cgroup2 view on `/sys/fs/cgroup`.
+After preparing these privileged resources and optionally setting the hostname,
+`tgbsctl` removes `CAP_SYS_ADMIN` from the command's capability sets and
+bounding set, then enables `no_new_privs` before `exec`.
 
 The private `/run/tgbs/channels` contains only channels whose source or
 destination matches the domain. Contracts and lifetime locks are read-only.
@@ -149,9 +152,11 @@ a message is pending and the size of the next message.
 
 The endpoint locks enforce one `libtgbscomm` source and one destination. Mount
 namespaces hide unrelated channels and expose only the lock corresponding to
-the domain's role as writable. This remains a nominal boundary while container
-processes retain `CAP_SYS_ADMIN`, since they can alter their own mount table.
-No credential passing or `SO_PASSCRED` is used.
+the domain's role as writable. Container processes cannot alter this view
+because `CAP_SYS_ADMIN` is removed before the application starts. This does not
+yet form a complete security boundary: the processes still use the host root
+identity and the shared root filesystem remains writable. No credential
+passing or `SO_PASSCRED` is used.
 
 ## Runtime monitor
 

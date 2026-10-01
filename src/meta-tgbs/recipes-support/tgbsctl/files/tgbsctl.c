@@ -38,7 +38,8 @@ void usage(const char *prog)
 {
 	fprintf(stderr,
 		"Usage:\n"
-		"  %s run --name NAME --runtime-us RUNTIME --period-us PERIOD\n"
+		"  %s run --name NAME [--hostname HOSTNAME]\n"
+		"         --runtime-us RUNTIME --period-us PERIOD\n"
 		"         [--cpus CPU-LIST|inherit] [--reclaim BOOL]\n"
 		"         [--memory-max BYTES|max] [--pids-max COUNT|max]\n"
 		"         COMMAND [ARGS...]\n"
@@ -70,6 +71,8 @@ void usage(const char *prog)
 		"           inherit selects the cgroup root's effective CPU list.\n"
 		"           BOOL accepts 0, 1, false, or true.\n"
 		"           Resource limits are positive integers or max (the default).\n"
+		"           HOSTNAME is set in the private UTS namespace before privileges\n"
+		"           are reduced. CAP_SYS_ADMIN is unavailable to COMMAND.\n"
 		"  list     List the TGBS domains known to this runtime.\n"
 		"  inspect  Show the state, temporal contract, and processes for NAME.\n"
 		"  kill     Kill every process in NAME. The run supervisor then cleans up.\n"

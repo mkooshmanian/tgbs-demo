@@ -35,6 +35,7 @@ case "${1:-}" in
         echo "Entering the '${DOMAIN}' TGBS container."
         exec tgbsctl run \
             --name "${DOMAIN}" \
+            --hostname tgbs-self \
             --runtime-us "${RUNTIME_US}" \
             --period-us "${PERIOD_US}" \
             --cpus "${CPUS}" \

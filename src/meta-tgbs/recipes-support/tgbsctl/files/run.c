@@ -10,12 +10,14 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <getopt.h>
+#include <linux/capability.h>
 #include <linux/mount.h>
 #include <linux/sched.h>
 #include <signal.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/mount.h>
+#include <sys/prctl.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
@@ -31,6 +33,56 @@ enum run_option {
 static void signal_handler(int sig)
 {
 	g_signal = sig;
+}
+
+static int drop_cap_sys_admin(void)
+{
+	struct __user_cap_header_struct header = {
+		.version = _LINUX_CAPABILITY_VERSION_3,
+		.pid = 0,
+	};
+	struct __user_cap_data_struct data[_LINUX_CAPABILITY_U32S_3];
+	const unsigned int index = CAP_SYS_ADMIN / 32U;
+	const unsigned int mask = 1U << (CAP_SYS_ADMIN % 32U);
+	int bounded;
+
+	/* Dropping from the bounding set is irreversible for this process tree and
+	 * prevents UID 0 exec semantics from granting CAP_SYS_ADMIN again. */
+	if (prctl(PR_CAPBSET_DROP, CAP_SYS_ADMIN, 0, 0, 0) != 0)
+		return -1;
+	if (prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_LOWER,
+			CAP_SYS_ADMIN, 0, 0) != 0)
+		return -1;
+
+	memset(data, 0, sizeof(data));
+	if (syscall(SYS_capget, &header, data) != 0)
+		return -1;
+	data[index].effective &= ~mask;
+	data[index].permitted &= ~mask;
+	data[index].inheritable &= ~mask;
+	if (syscall(SYS_capset, &header, data) != 0)
+		return -1;
+
+	if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0)
+		return -1;
+	bounded = prctl(PR_CAPBSET_READ, CAP_SYS_ADMIN, 0, 0, 0);
+	if (bounded < 0)
+		return -1;
+	if (bounded != 0) {
+		errno = EIO;
+		return -1;
+	}
+
+	memset(data, 0, sizeof(data));
+	if (syscall(SYS_capget, &header, data) != 0)
+		return -1;
+	if ((data[index].effective & mask) != 0 ||
+	    (data[index].permitted & mask) != 0 ||
+	    (data[index].inheritable & mask) != 0) {
+		errno = EIO;
+		return -1;
+	}
+	return 0;
 }
 
 static int mkdir_if_missing(const char *path, mode_t mode)
@@ -266,6 +318,7 @@ static int write_meta(const char *tmp, pid_t pid, unsigned long long starttime)
 int cmd_run(int argc, char **argv)
 {
 	const char *name = NULL;
+	const char *hostname = NULL;
 	const char *cpu_list = NULL;
 	unsigned long long runtime_us = 0;
 	unsigned long long period_us = 0;
@@ -298,6 +351,7 @@ int cmd_run(int argc, char **argv)
 
 	static const struct option longopts[] = {
 		{"name", required_argument, NULL, 'n'},
+		{"hostname", required_argument, NULL, 'H'},
 		{"runtime-us", required_argument, NULL, 'r'},
 		{"period-us", required_argument, NULL, 'p'},
 		{"cpus", required_argument, NULL, 'c'},
@@ -308,13 +362,16 @@ int cmd_run(int argc, char **argv)
 		{0, 0, 0, 0},
 	};
 	optind = 2;
-	while ((opt = getopt_long(argc, argv, "+hc:n:r:p:R:", longopts, NULL)) != -1) {
+	while ((opt = getopt_long(argc, argv, "+hH:c:n:r:p:R:", longopts, NULL)) != -1) {
 		switch (opt) {
 		case 'h':
 			usage(argv[0]);
 			return 0;
 		case 'n':
 			name = optarg;
+			break;
+		case 'H':
+			hostname = optarg;
 			break;
 		case 'r':
 			if (parse_positive(optarg, &runtime_us) != 0)
@@ -358,6 +415,14 @@ int cmd_run(int argc, char **argv)
 	if (name == NULL || !is_valid_name(name)) {
 		fprintf(stderr, "tgbsctl: ERROR - --name must match [a-zA-Z0-9_.-]+ (max 255, no '/'); got '%s'\n",
 			name == NULL ? "(null)" : name);
+		return 1;
+	}
+	if (hostname != NULL &&
+	    (!is_valid_name(hostname) || strlen(hostname) > HOST_NAME_MAX)) {
+		fprintf(stderr,
+			"tgbsctl: ERROR - --hostname must match [a-zA-Z0-9_.-]+ "
+			"and contain at most %d characters; got '%s'\n",
+			HOST_NAME_MAX, hostname);
 		return 1;
 	}
 	if (runtime_us == 0 || period_us == 0) {
@@ -517,6 +582,17 @@ int cmd_run(int argc, char **argv)
 		}
 		channel_mount_plan_close(&channel_mounts);
 		channel_topology_unlock(topology_fd);
+		if (hostname != NULL && sethostname(hostname, strlen(hostname)) != 0) {
+			fprintf(stderr, "tgbsctl: ERROR - unable to set hostname to '%s': %s\n",
+				hostname, strerror(errno));
+			_exit(127);
+		}
+		if (drop_cap_sys_admin() != 0) {
+			fprintf(stderr,
+				"tgbsctl: ERROR - unable to drop CAP_SYS_ADMIN: %s\n",
+				strerror(errno));
+			_exit(127);
+		}
 		execvp(argv[cmd_index], &argv[cmd_index]);
 		fprintf(stderr, "tgbsctl: ERROR - failed to execute '%s': %s\n",
 			argv[cmd_index], strerror(errno));

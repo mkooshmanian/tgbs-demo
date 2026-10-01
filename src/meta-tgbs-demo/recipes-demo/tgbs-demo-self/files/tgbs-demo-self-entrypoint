@@ -2,8 +2,6 @@
 
 set -eu
 
-hostname tgbs-self
-
 echo
 echo "TGBS interactive container"
 echo "  hostname:   $(hostname)"
