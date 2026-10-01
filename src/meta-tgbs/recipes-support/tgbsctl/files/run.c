@@ -23,6 +23,11 @@
 
 static volatile sig_atomic_t g_signal = 0;
 
+enum run_option {
+	OPT_MEMORY_MAX = 256,
+	OPT_PIDS_MAX
+};
+
 static void signal_handler(int sig)
 {
 	g_signal = sig;
@@ -264,6 +269,8 @@ int cmd_run(int argc, char **argv)
 	const char *cpu_list = NULL;
 	unsigned long long runtime_us = 0;
 	unsigned long long period_us = 0;
+	char memory_max[32] = "max";
+	char pids_max[32] = "max";
 	int reclaim = 0;
 	int reclaim_set = 0;
 	int opt;
@@ -295,6 +302,8 @@ int cmd_run(int argc, char **argv)
 		{"period-us", required_argument, NULL, 'p'},
 		{"cpus", required_argument, NULL, 'c'},
 		{"reclaim", required_argument, NULL, 'R'},
+		{"memory-max", required_argument, NULL, OPT_MEMORY_MAX},
+		{"pids-max", required_argument, NULL, OPT_PIDS_MAX},
 		{"help", no_argument, NULL, 'h'},
 		{0, 0, 0, 0},
 	};
@@ -322,6 +331,16 @@ int cmd_run(int argc, char **argv)
 			if (parse_bool(optarg, &reclaim) != 0)
 				error_exit("--reclaim must be one of 0, 1, false, or true");
 			reclaim_set = 1;
+			break;
+		case OPT_MEMORY_MAX:
+			if (parse_cgroup_limit(optarg, memory_max,
+					sizeof(memory_max)) != 0)
+				error_exit("--memory-max must be a positive byte count or max");
+			break;
+		case OPT_PIDS_MAX:
+			if (parse_cgroup_limit(optarg, pids_max,
+					sizeof(pids_max)) != 0)
+				error_exit("--pids-max must be a positive count or max");
 			break;
 		default:
 			usage(argv[0]);
@@ -394,6 +413,24 @@ int cmd_run(int argc, char **argv)
 		errno = saved_errno;
 		error_exit("unable to set cpuset.cpus for %s to '%s': %s",
 			name, cpu_list, strerror(errno));
+	}
+
+	/* Resource limits are configured before the first task enters the group. */
+	if (configure_domain_limit(name, "memory.max", memory_max) != 0) {
+		int saved_errno = errno;
+
+		cleanup_run(name);
+		errno = saved_errno;
+		error_exit("unable to set memory.max for %s to '%s': %s",
+			name, memory_max, strerror(errno));
+	}
+	if (configure_domain_limit(name, "pids.max", pids_max) != 0) {
+		int saved_errno = errno;
+
+		cleanup_run(name);
+		errno = saved_errno;
+		error_exit("unable to set pids.max for %s to '%s': %s",
+			name, pids_max, strerror(errno));
 	}
 
 	/* Configure the temporal contract before any task enters the cgroup. */

@@ -136,10 +136,11 @@ int cmd_set(const char *name, const char *field, const char *value_text)
 {
 	char path[PATH_MAX];
 	char effective[CPU_LIST_SIZE];
+	char limit[32];
 	unsigned long long value;
 	unsigned long long other;
 	unsigned long long actual;
-	const char *filename;
+	const char *filename = NULL;
 	int reclaim;
 
 	if (require_domain(name) != 0)
@@ -178,9 +179,29 @@ int cmd_set(const char *name, const char *field, const char *value_text)
 			name, reclaim ? "true" : "false");
 		return 0;
 	}
+	if (strcmp(field, "memory-max") == 0 ||
+	    strcmp(field, "pids-max") == 0) {
+		const char *limit_filename = strcmp(field, "memory-max") == 0 ?
+			"memory.max" : "pids.max";
+
+		if (parse_cgroup_limit(value_text, limit, sizeof(limit)) != 0) {
+			fprintf(stderr,
+				"tgbsctl: ERROR - %s must be a positive integer or max\n",
+				field);
+			return 2;
+		}
+		if (configure_domain_limit(name, limit_filename, limit) != 0) {
+			fprintf(stderr, "tgbsctl: ERROR - unable to set %s for %s: %s\n",
+				field, name, strerror(errno));
+			return 1;
+		}
+		printf("tgbsctl: set %s for %s to %s\n", field, name, limit);
+		return 0;
+	}
 	if (strcmp(field, "runtime") != 0 && strcmp(field, "period") != 0) {
 		fprintf(stderr,
-			"tgbsctl: ERROR - set field must be 'runtime', 'period', 'cpus', or 'reclaim'\n");
+			"tgbsctl: ERROR - set field must be 'runtime', 'period', 'cpus', "
+			"'reclaim', 'memory-max', or 'pids-max'\n");
 		return 2;
 	}
 

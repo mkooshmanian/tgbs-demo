@@ -39,7 +39,9 @@ void usage(const char *prog)
 	fprintf(stderr,
 		"Usage:\n"
 		"  %s run --name NAME --runtime-us RUNTIME --period-us PERIOD\n"
-		"         [--cpus CPU-LIST|inherit] [--reclaim BOOL] COMMAND [ARGS...]\n"
+		"         [--cpus CPU-LIST|inherit] [--reclaim BOOL]\n"
+		"         [--memory-max BYTES|max] [--pids-max COUNT|max]\n"
+		"         COMMAND [ARGS...]\n"
 		"  %s list\n"
 		"  %s inspect NAME\n"
 		"  %s kill NAME\n"
@@ -49,6 +51,8 @@ void usage(const char *prog)
 		"  %s set NAME period VALUE_US\n"
 		"  %s set NAME cpus CPU-LIST|inherit\n"
 		"  %s set NAME reclaim 0|1|false|true\n"
+		"  %s set NAME memory-max BYTES|max\n"
+		"  %s set NAME pids-max COUNT|max\n"
 		"  %s channel create --name NAME --source DOMAIN --destination DOMAIN\n"
 		"         --max-message-size BYTES\n"
 		"  %s channel list\n"
@@ -65,6 +69,7 @@ void usage(const char *prog)
 		"           CPU-LIST uses the cpuset list syntax, for example 0-1 or 0,2;\n"
 		"           inherit selects the cgroup root's effective CPU list.\n"
 		"           BOOL accepts 0, 1, false, or true.\n"
+		"           Resource limits are positive integers or max (the default).\n"
 		"  list     List the TGBS domains known to this runtime.\n"
 		"  inspect  Show the state, temporal contract, and processes for NAME.\n"
 		"  kill     Kill every process in NAME. The run supervisor then cleans up.\n"
@@ -73,7 +78,7 @@ void usage(const char *prog)
 		"  set      Change one value of NAME's temporal contract.\n"
 		"  channel  Manage immutable inter-container channel contracts.\n",
 		prog, prog, prog, prog, prog, prog, prog, prog, prog, prog,
-		prog, prog, prog, prog, CG_ROOT);
+		prog, prog, prog, prog, prog, prog, CG_ROOT);
 }
 
 int is_valid_name(const char *name)
@@ -102,6 +107,35 @@ int parse_positive(const char *text, unsigned long long *out)
 	if (value == 0)
 		return -1;
 	*out = value;
+	return 0;
+}
+
+int parse_cgroup_limit(const char *text, char *out, size_t outsz)
+{
+	unsigned long long value;
+	int len;
+
+	if (text == NULL || out == NULL || outsz == 0) {
+		errno = EINVAL;
+		return -1;
+	}
+	if (strcmp(text, "max") == 0) {
+		if (outsz < sizeof("max")) {
+			errno = ENOSPC;
+			return -1;
+		}
+		memcpy(out, "max", sizeof("max"));
+		return 0;
+	}
+	if (parse_positive(text, &value) != 0) {
+		errno = EINVAL;
+		return -1;
+	}
+	len = snprintf(out, outsz, "%llu", value);
+	if (len < 0 || (size_t)len >= outsz) {
+		errno = ENOSPC;
+		return -1;
+	}
 	return 0;
 }
 
@@ -357,6 +391,33 @@ int configure_domain_reclaim(const char *name, int reclaim)
 	return 0;
 }
 
+int configure_domain_limit(const char *name, const char *filename,
+		const char *value)
+{
+	char path[PATH_MAX];
+	char normalized[32];
+	char actual[32];
+
+	if (strcmp(filename, "memory.max") != 0 &&
+	    strcmp(filename, "pids.max") != 0) {
+		errno = EINVAL;
+		return -1;
+	}
+	if (parse_cgroup_limit(value, normalized, sizeof(normalized)) != 0)
+		return -1;
+
+	snprintf(path, sizeof(path), "%s/%s/%s", CG_ROOT, name, filename);
+	if (write_text(path, normalized) != 0)
+		return -1;
+	if (read_text(path, actual, sizeof(actual)) != 0)
+		return -1;
+	if (strcmp(actual, normalized) != 0) {
+		errno = EIO;
+		return -1;
+	}
+	return 0;
+}
+
 void error_exit(const char *fmt, ...)
 {
 	va_list ap;
@@ -375,6 +436,9 @@ void verify_cgroup_env(void)
 	char controller[64];
 	struct statfs fs;
 	int found_cpu = 0;
+	int found_cpuset = 0;
+	int found_memory = 0;
+	int found_pids = 0;
 
 	if (access(CG_ROOT "/cgroup.controllers", R_OK) != 0)
 		error_exit(CG_ROOT "/cgroup.controllers is missing, the unified hierarchy is unavailable");
@@ -388,15 +452,25 @@ void verify_cgroup_env(void)
 	if (f == NULL)
 		error_exit("unable to open " CG_ROOT "/cgroup.controllers");
 	while (fscanf(f, "%63s", controller) == 1) {
-		if (strcmp(controller, "cpu") == 0) {
+		if (strcmp(controller, "cpu") == 0)
 			found_cpu = 1;
-			break;
-		}
+		else if (strcmp(controller, "cpuset") == 0)
+			found_cpuset = 1;
+		else if (strcmp(controller, "memory") == 0)
+			found_memory = 1;
+		else if (strcmp(controller, "pids") == 0)
+			found_pids = 1;
 	}
 	fclose(f);
 
 	if (!found_cpu)
 		error_exit("the cpu controller is not available in " CG_ROOT "/cgroup.controllers");
+	if (!found_cpuset)
+		error_exit("the cpuset controller is not available in " CG_ROOT "/cgroup.controllers");
+	if (!found_memory)
+		error_exit("the memory controller is not available in " CG_ROOT "/cgroup.controllers");
+	if (!found_pids)
+		error_exit("the pids controller is not available in " CG_ROOT "/cgroup.controllers");
 }
 
 /* Terminate every remaining task inside the cgroup. */

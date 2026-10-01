@@ -259,6 +259,49 @@ static int read_reclaim(const char *name, int *reclaim)
 	return 0;
 }
 
+static int read_resource_file(const char *name, const char *filename,
+		char *out, size_t outsz)
+{
+	char path[PATH_MAX];
+
+	snprintf(path, sizeof(path), "%s/%s/%s", CG_ROOT, name, filename);
+	return read_text(path, out, outsz);
+}
+
+static int format_bytes(const char *text, char *out, size_t outsz)
+{
+	static const char *const units[] = {
+		"B", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB"
+	};
+	unsigned long long bytes;
+	long double value;
+	char *end;
+	size_t unit = 0;
+	int len;
+
+	if (strcmp(text, "max") == 0) {
+		len = snprintf(out, outsz, "max");
+		return len >= 0 && (size_t)len < outsz ? 0 : -1;
+	}
+
+	errno = 0;
+	bytes = strtoull(text, &end, 10);
+	if (errno != 0 || end == text || *end != '\0')
+		return -1;
+
+	value = (long double)bytes;
+	while (value >= 1024.0L && unit + 1 < sizeof(units) / sizeof(units[0])) {
+		value /= 1024.0L;
+		unit++;
+	}
+
+	if (unit == 0)
+		len = snprintf(out, outsz, "%llu %s", bytes, units[unit]);
+	else
+		len = snprintf(out, outsz, "%.2Lf %s", value, units[unit]);
+	return len >= 0 && (size_t)len < outsz ? 0 : -1;
+}
+
 static int read_main_meta(const char *name, pid_t *pid,
 		unsigned long long *starttime)
 {
@@ -421,6 +464,33 @@ int cmd_inspect(const char *name)
 		cpu_cfg = -1;
 	int reclaim = 0;
 	int reclaim_cfg = read_reclaim(name, &reclaim);
+	char memory_current[32] = "";
+	char memory_peak[32] = "";
+	char memory_max[32] = "";
+	char memory_current_human[32] = "";
+	char memory_peak_human[32] = "";
+	char memory_max_human[32] = "";
+	char pids_current[32] = "";
+	char pids_max[32] = "";
+	int memory_current_cfg = read_resource_file(name, "memory.current",
+		memory_current, sizeof(memory_current));
+	int memory_peak_cfg = read_resource_file(name, "memory.peak",
+		memory_peak, sizeof(memory_peak));
+	int memory_max_cfg = read_resource_file(name, "memory.max",
+		memory_max, sizeof(memory_max));
+	int pids_current_cfg = read_resource_file(name, "pids.current",
+		pids_current, sizeof(pids_current));
+	int pids_max_cfg = read_resource_file(name, "pids.max",
+		pids_max, sizeof(pids_max));
+	if (memory_current_cfg == 0 && format_bytes(memory_current,
+			memory_current_human, sizeof(memory_current_human)) != 0)
+		memory_current_cfg = -1;
+	if (memory_peak_cfg == 0 && format_bytes(memory_peak,
+			memory_peak_human, sizeof(memory_peak_human)) != 0)
+		memory_peak_cfg = -1;
+	if (memory_max_cfg == 0 && format_bytes(memory_max,
+			memory_max_human, sizeof(memory_max_human)) != 0)
+		memory_max_cfg = -1;
 	long double budget_per_cpu = 0.0L;
 	long double total_budget = 0.0L;
 	if (cfg == 0 && cpu_cfg == 0) {
@@ -456,6 +526,16 @@ int cmd_inspect(const char *name)
 		printf("Total budget: (unavailable)\n");
 	printf("Reclaim:     %s\n", reclaim_cfg == 0 ?
 		(reclaim ? "true" : "false") : "(unavailable)");
+	printf("Memory:      %s\n", memory_current_cfg == 0 ?
+		memory_current_human : "(unavailable)");
+	printf("Memory peak: %s\n", memory_peak_cfg == 0 ?
+		memory_peak_human : "(unavailable)");
+	printf("Memory max:  %s\n", memory_max_cfg == 0 ?
+		memory_max_human : "(unavailable)");
+	printf("PIDs:        %s\n", pids_current_cfg == 0 ?
+		pids_current : "(unavailable)");
+	printf("PIDs max:    %s\n", pids_max_cfg == 0 ?
+		pids_max : "(unavailable)");
 	printf("Processes:   %s\n", procs[0] ? procs : "(none)");
 	printf("Command:     %s\n", command != NULL ? command : "(not alive)");
 	free(command);

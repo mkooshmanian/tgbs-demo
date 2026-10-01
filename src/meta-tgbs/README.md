@@ -18,18 +18,22 @@ fragment and described by a matching device-tree overlay.
 
 ## Runtime control
 
-The image integration mounts a unified cgroup v2 hierarchy and enables both
-the `cpu` and `cpuset` controllers. `tgbsctl` creates one direct child of the
-cgroup root per managed workload and can configure its temporal contract, CPU
-placement, and optional DEADLINE bandwidth reclaim:
+The image integration mounts a unified cgroup v2 hierarchy and enables the
+`cpu`, `cpuset`, `memory`, and `pids` controllers. `tgbsctl` creates one direct
+child of the cgroup root per managed workload and can configure its temporal
+contract, CPU placement, resource limits, and optional DEADLINE bandwidth
+reclaim:
 
 ```sh
 tgbsctl run --name worker --runtime-us 20000 --period-us 100000 \
-    --cpus 0 --reclaim false /usr/bin/worker
+    --cpus 0 --reclaim false --memory-max 268435456 --pids-max 128 \
+    /usr/bin/worker
 
 tgbsctl set worker cpus 0-1
 tgbsctl set worker cpus inherit
 tgbsctl set worker reclaim true
+tgbsctl set worker memory-max 536870912
+tgbsctl set worker pids-max max
 ```
 
 `run` uses `clone3(CLONE_INTO_CGROUP)` to create the command directly in its
@@ -52,6 +56,11 @@ CPU placement uses the standard `cpuset.cpus` CPU-list syntax. `inherit`
 restores the cgroup root's current effective CPU list; this works for populated
 domains, for which the kernel may reject an empty `cpuset.cpus`. Boolean reclaim
 values accept `0`, `1`, `false`, and `true`.
+
+`memory-max` is expressed in bytes and `pids-max` as a task count. Both
+accept a strictly positive integer or `max`, which is also the default when the
+corresponding `run` option is omitted. `inspect` reports their limits and
+current usage, together with the peak memory usage.
 
 `run --cpus` applies the CPU placement before the non-zero temporal contract,
 so the kernel admission test sees the intended CPUs. With TGBS 1.4, a later

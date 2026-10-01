@@ -9,7 +9,7 @@
 # Required-Stop:     $local_fs
 # Default-Start:     S
 # Default-Stop:      0 6
-# Short-Description: Mount cgroup v2 and enable cpu and cpuset for TGBS.
+# Short-Description: Mount cgroup v2 and enable TGBS resource controllers.
 # Description:       Prepare the cgroup v2 hierarchy at /sys/fs/cgroup so that
 #                    TGBS can create and place task groups under the root, and
 #                    initialize the volatile communication-channel store. Does
@@ -71,9 +71,9 @@ if [ ! -r "$CG_ROOT/cgroup.controllers" ]; then
 	exit 1
 fi
 
-# TGBS uses cpu for temporal contracts and cpuset both to constrain tasks and
-# to select the CPUs on which its per-CPU bandwidth servers are active.
-for controller in cpu cpuset; do
+# TGBS uses cpu for temporal contracts, cpuset for placement, and memory and
+# pids to bound the resources available to each managed domain.
+for controller in cpu cpuset memory pids; do
 	if ! grep -w -q "$controller" "$CG_ROOT/cgroup.controllers"; then
 		echo "tgbs: ERROR - the $controller controller is not available in $CG_ROOT/cgroup.controllers" >&2
 		exit 1
@@ -87,5 +87,5 @@ for controller in cpu cpuset; do
 	fi
 done
 
-echo "tgbs: cgroup v2 is ready at $CG_ROOT, cpu and cpuset enabled at the root"
+echo "tgbs: cgroup v2 is ready at $CG_ROOT, cpu, cpuset, memory, and pids enabled at the root"
 exit 0

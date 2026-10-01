@@ -68,6 +68,9 @@ int is_valid_name(const char *name);
 
 int parse_positive(const char *text, unsigned long long *out);
 
+/* Normalize a positive cgroup limit or the literal "max". */
+int parse_cgroup_limit(const char *text, char *out, size_t outsz);
+
 /* Parse exactly 0/1 or true/false (case-insensitive). */
 int parse_bool(const char *text, int *out);
 
@@ -91,6 +94,9 @@ int cgroup_kill(const char *name);
 int configure_domain_cpus(const char *name, const char *cpu_list);
 
 int configure_domain_reclaim(const char *name, int reclaim);
+
+int configure_domain_limit(const char *name, const char *filename,
+	const char *value);
 
 /* Read /proc/<pid>/stat starttime (kernel ticks). Returns 0 on success. */
 int read_starttime(pid_t pid, unsigned long long *out);
