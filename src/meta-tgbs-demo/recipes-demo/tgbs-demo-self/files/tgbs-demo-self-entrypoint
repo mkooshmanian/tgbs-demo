@@ -16,4 +16,5 @@ echo "Type 'exit' or press Ctrl-D to leave the container."
 echo
 
 export PS1='[tgbs-self]# '
+cd "${HOME:-/}"
 exec /bin/sh -i
