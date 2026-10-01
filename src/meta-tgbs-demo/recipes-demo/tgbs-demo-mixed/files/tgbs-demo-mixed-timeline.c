@@ -9,9 +9,7 @@
 
 #include <ctype.h>
 #include <errno.h>
-#include <fcntl.h>
 #include <getopt.h>
-#include <limits.h>
 #include <poll.h>
 #include <signal.h>
 #include <stdbool.h>
@@ -31,7 +29,9 @@
 #define FAKEJOB_VERSION 1u
 #define FAKEJOB_TYPE_T0 0u
 #define FAKEJOB_TYPE_JOB 1u
+#define FAKEJOB_TYPE_METADATA 2u
 #define FAKEJOB_TOTAL_SIZE 36u
+#define FAKEJOB_METADATA_SIZE 92u
 
 #define MAX_RT_TASKS 32
 #define HISTORY_SIZE 2048
@@ -61,10 +61,22 @@ struct metrics_record {
 	uint64_t start_ns;
 	uint64_t finish_ns;
 };
+
+struct metrics_metadata {
+	uint32_t magic;
+	uint32_t version;
+	uint32_t type;
+	uint32_t pid;
+	uint64_t period_ns;
+	int32_t priority;
+	char name[TASK_NAME_SIZE];
+};
 #pragma pack(pop)
 
 _Static_assert(sizeof(struct metrics_record) == FAKEJOB_TOTAL_SIZE,
 	"unexpected fake-task metrics record size");
+_Static_assert(sizeof(struct metrics_metadata) == FAKEJOB_METADATA_SIZE,
+	"unexpected fake-task metrics metadata size");
 
 struct sample {
 	double response_ms;
@@ -94,7 +106,6 @@ static bool terminal_saved;
 static bool use_color = true;
 static unsigned int window_seconds = DEFAULT_WINDOW_SECONDS;
 static const char *socket_name = "@tgbs-demo-mixed";
-static const char *state_dir = "/run/tgbs-demo/mixed";
 
 static const char *color(const char *code)
 {
@@ -203,36 +214,6 @@ static int bind_metrics_socket(const char *name)
 	return fd;
 }
 
-static bool load_task_metadata(struct rt_task *task)
-{
-	char path[PATH_MAX];
-	FILE *stream;
-	char name[TASK_NAME_SIZE];
-	double period;
-	int priority;
-
-	if (snprintf(path, sizeof(path), "%s/%u.task", state_dir, task->pid) >=
-	    (int)sizeof(path))
-		return false;
-	stream = fopen(path, "r");
-	if (stream == NULL)
-		return false;
-	if (fscanf(stream, "%63s %lf %d", name, &period, &priority) != 3 ||
-	    period <= 0.0) {
-		fclose(stream);
-		return false;
-	}
-	fclose(stream);
-	for (char *cursor = name; *cursor != '\0'; cursor++) {
-		if (!isprint((unsigned char)*cursor))
-			*cursor = '?';
-	}
-	snprintf(task->name, sizeof(task->name), "%s", name);
-	task->period_ms = period;
-	task->priority = priority;
-	return true;
-}
-
 static struct rt_task *find_task(uint32_t pid)
 {
 	for (unsigned int i = 0; i < task_count; i++) {
@@ -246,19 +227,37 @@ static struct rt_task *get_task(uint32_t pid)
 {
 	struct rt_task *task = find_task(pid);
 
-	if (task != NULL) {
-		if (task->period_ms <= 0.0)
-			load_task_metadata(task);
+	if (task != NULL)
 		return task;
-	}
 	if (task_count >= MAX_RT_TASKS)
 		return NULL;
 	task = &tasks[task_count++];
 	memset(task, 0, sizeof(*task));
 	task->pid = pid;
 	snprintf(task->name, sizeof(task->name), "pid-%u", pid);
-	load_task_metadata(task);
 	return task;
+}
+
+static void process_metadata(const struct metrics_metadata *metadata)
+{
+	struct rt_task *task;
+
+	if (metadata->magic != FAKEJOB_MAGIC ||
+	    metadata->version != FAKEJOB_VERSION ||
+	    metadata->type != FAKEJOB_TYPE_METADATA ||
+	    metadata->period_ns == 0)
+		return;
+	task = get_task(metadata->pid);
+	if (task == NULL)
+		return;
+	memcpy(task->name, metadata->name, sizeof(task->name));
+	task->name[sizeof(task->name) - 1] = '\0';
+	for (char *cursor = task->name; *cursor != '\0'; cursor++) {
+		if (!isprint((unsigned char)*cursor))
+			*cursor = '?';
+	}
+	task->period_ms = (double)metadata->period_ns / 1000000.0;
+	task->priority = metadata->priority;
 }
 
 static void append_sample(struct rt_task *task, double response_ms,
@@ -312,10 +311,18 @@ static void process_record(const struct metrics_record *record)
 static void drain_socket(int fd)
 {
 	for (;;) {
-		struct metrics_record record;
-		ssize_t received = recv(fd, &record, sizeof(record), 0);
-		if (received == (ssize_t)sizeof(record)) {
-			process_record(&record);
+		union {
+			struct metrics_record record;
+			struct metrics_metadata metadata;
+		} datagram;
+		ssize_t received = recv(fd, &datagram, sizeof(datagram), 0);
+
+		if (received == (ssize_t)sizeof(datagram.metadata)) {
+			process_metadata(&datagram.metadata);
+			continue;
+		}
+		if (received == (ssize_t)sizeof(datagram.record)) {
+			process_record(&datagram.record);
 			continue;
 		}
 		if (received < 0 && errno == EINTR)
@@ -655,9 +662,6 @@ int main(int argc, char **argv)
 	override = getenv("TGBS_MIXED_METRICS_SOCKET");
 	if (override != NULL && override[0] != '\0')
 		socket_name = override;
-	override = getenv("TGBS_MIXED_STATE_DIR");
-	if (override != NULL && override[0] == '/')
-		state_dir = override;
 	socket_fd = bind_metrics_socket(socket_name);
 	if (socket_fd < 0) {
 		fprintf(stderr, "tgbs-demo-mixed-timeline: cannot listen on %s: %s\n",

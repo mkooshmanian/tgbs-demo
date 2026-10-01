@@ -10,9 +10,6 @@ set -eu
 CONFIG="$1"
 PIDS=""
 METRICS_SOCKET="${TGBS_MIXED_METRICS_SOCKET:-@tgbs-demo-mixed}"
-TASK_STATE_DIR="${TGBS_MIXED_STATE_DIR:-/run/tgbs-demo/mixed}"
-
-mkdir -p "${TASK_STATE_DIR}"
 
 cleanup()
 {
@@ -20,7 +17,6 @@ cleanup()
 
     for pid in ${PIDS}; do
         kill "${pid}" 2>/dev/null || true
-        rm -f "${TASK_STATE_DIR}/${pid}.task"
     done
 
     wait 2>/dev/null || true
@@ -48,10 +44,9 @@ while IFS="$(printf '\t')" read -r type name execution_time period policy priori
                 --sched=fifo \
                 --prio="${priority}" \
                 --metrics-socket="${METRICS_SOCKET}" \
+                --metrics-name="${name}" \
                 "${period}" "${execution_time}" &
             pid=$!
-            printf '%s\t%s\t%s\n' "${name}" "${period}" "${priority}" \
-                > "${TASK_STATE_DIR}/${pid}.task"
             ;;
         TaskQoS:OTHER)
             echo "Starting ${name}: continuous FAIR, C=${execution_time} ms"

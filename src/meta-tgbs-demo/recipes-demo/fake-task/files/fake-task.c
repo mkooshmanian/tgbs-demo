@@ -269,6 +269,9 @@ static void sleep_until_abs_monotonic_ns(int64_t abs_ns)
 static int metrics_fd = -1;
 static struct sockaddr_un metrics_dst;
 static socklen_t metrics_dst_len;
+static const char *metrics_label;
+static uint64_t metrics_period_ns;
+static int32_t metrics_priority;
 
 /*
  * On-wire metrics record: one datagram per job, little-endian.
@@ -289,10 +292,13 @@ static socklen_t metrics_dst_len;
 #define FAKEJOB_MAGIC    0x004A4B46u
 #define FAKEJOB_VERSION  1u
 #define FAKEJOB_TOTAL_SIZE  36
+#define FAKEJOB_METADATA_SIZE  92
 
 /* record kind carried by each datagram */
 #define FAKEJOB_TYPE_T0    0
 #define FAKEJOB_TYPE_JOB   1
+#define FAKEJOB_TYPE_METADATA 2
+#define FAKEJOB_NAME_SIZE 64
 
 #pragma pack(push, 1)
 typedef struct {
@@ -304,9 +310,22 @@ typedef struct {
     uint64_t start_ns;
     uint64_t finish_ns;
 } metrics_record_t;
+
+typedef struct {
+    uint32_t magic;
+    uint32_t version;
+    uint32_t type;
+    uint32_t pid;
+    uint64_t period_ns;
+    int32_t priority;
+    char name[FAKEJOB_NAME_SIZE];
+} metrics_metadata_t;
 #pragma pack(pop)
+
 _Static_assert(sizeof(metrics_record_t) == FAKEJOB_TOTAL_SIZE,
                "metrics_record_t must be exactly FAKEJOB_TOTAL_SIZE bytes");
+_Static_assert(sizeof(metrics_metadata_t) == FAKEJOB_METADATA_SIZE,
+               "metrics_metadata_t must be exactly FAKEJOB_METADATA_SIZE bytes");
 
 /**
  * @brief Open a Unix datagram socket for best-effort metrics.
@@ -397,6 +416,28 @@ static inline void metrics_emit_job(uint64_t iter, int64_t start_ns, int64_t fin
     (void)sent;
 }
 
+static inline void metrics_emit_metadata(void)
+{
+    metrics_metadata_t metadata;
+
+    if (metrics_fd < 0)
+        return;
+    memset(&metadata, 0, sizeof(metadata));
+    metadata.magic = FAKEJOB_MAGIC;
+    metadata.version = FAKEJOB_VERSION;
+    metadata.type = FAKEJOB_TYPE_METADATA;
+    metadata.pid = (uint32_t)getpid();
+    metadata.period_ns = metrics_period_ns;
+    metadata.priority = metrics_priority;
+    if (metrics_label != NULL)
+        snprintf(metadata.name, sizeof(metadata.name), "%s", metrics_label);
+    else
+        snprintf(metadata.name, sizeof(metadata.name), "pid-%ld", (long)getpid());
+
+    (void)sendto(metrics_fd, &metadata, sizeof(metadata), MSG_NOSIGNAL,
+                 (struct sockaddr *)&metrics_dst, metrics_dst_len);
+}
+
 /**
  * @brief Emit a T0 datagram recording the loop's first release instant.
  *
@@ -411,6 +452,10 @@ static inline void metrics_emit_t0(int64_t release_ns)
 {
     if (metrics_fd < 0)
         return;
+
+    /* Repeat metadata with every origin record so a collector can attach
+     * after the workload has started without a shared state directory. */
+    metrics_emit_metadata();
 
     metrics_record_t rec;
     memset(&rec, 0, sizeof(rec));
@@ -935,11 +980,11 @@ static void print_usage(const char *prog)
     fprintf(stderr,
             "Usage: %s [-v] [-w] [--periodic|--continuous|--mode=MODE] [-s POLICY] [-n NICE] [-p PRIO|--prio=PRIO]\n"
             "          [--dl-runtime=MS --dl-period=MS [--dl-deadline=MS]]\n"
-            "          [--rand-exec] [--log=FILE] [--metrics-socket=PATH]\n"
+            "          [--rand-exec] [--log=FILE] [--metrics-socket=PATH] [--metrics-name=NAME]\n"
             "          <period_ms> <exec_ms> [iterations]\n"
             "       %s [-v] [-w] [--continuous|--mode=continuous] [-s POLICY] [-n NICE] [-p PRIO|--prio=PRIO]\n"
             "          [--dl-runtime=MS --dl-period=MS --dl-deadline=MS]\n"
-            "          [--rand-exec] [--log=FILE] [--metrics-socket=PATH]\n"
+            "          [--rand-exec] [--log=FILE] [--metrics-socket=PATH] [--metrics-name=NAME]\n"
             "          <exec_ms> [iterations]\n"
             "\n"
             "Options:\n"
@@ -962,7 +1007,8 @@ static void print_usage(const char *prog)
              "                       : Emit one FAKEJOB record per job over a Unix datagram\n"
             "                       : socket at PATH (abstract name if it starts with '@').\n"
             "                       : Several fake-task instances may share the same socket.\n"
-            "                       : Metrics are disabled when this option is omitted.\n",
+            "                       : Metrics are disabled when this option is omitted.\n"
+            "  --metrics-name=NAME : Task name included in metrics metadata.\n",
             prog, prog);
 }
 
@@ -979,6 +1025,7 @@ int main(int argc, char *argv[])
 
     const char *log_path = NULL; /* optional CSV path */
     const char *metrics_socket = NULL;
+    const char *metrics_name = NULL;
     void *csv_sink = NULL;
     sched_config_t sched_cfg = {0};
     activation_mode_t activation_mode = ACT_MODE_PERIODIC;
@@ -1271,6 +1318,18 @@ int main(int argc, char *argv[])
             ++argi;
             continue;
         }
+        if (strncmp(argv[argi], "--metrics-name=", 15) == 0)
+        {
+            const char *p = argv[argi] + 15;
+            if (*p == '\0' || strlen(p) >= FAKEJOB_NAME_SIZE)
+            {
+                fprintf(stderr, "Invalid --metrics-name value\n");
+                return EXIT_FAILURE;
+            }
+            metrics_name = p;
+            ++argi;
+            continue;
+        }
         // Unknown option
         print_usage(argv[0]);
         return EXIT_FAILURE;
@@ -1469,6 +1528,10 @@ int main(int argc, char *argv[])
         fprintf(stderr, "Warning: metrics socket disabled.\n");
         metrics_fd = -1;
     }
+    metrics_label = metrics_name;
+    metrics_period_ns = activation_mode == ACT_MODE_PERIODIC ?
+        (uint64_t)NS_FROM_MS(period_ms) : 0;
+    metrics_priority = sched_cfg.rt_prio_effective;
 
     /* Print recap before starting (with or without wait) */
     if (g_verbose)
