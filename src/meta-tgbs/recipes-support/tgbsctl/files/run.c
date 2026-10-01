@@ -118,6 +118,55 @@ static int report_mount_error(const char *operation, const char *path)
 	return -1;
 }
 
+static int setup_overlay_root(void)
+{
+	static const char stage[] = "/run/.tgbs-root";
+	static const char upper[] = "/run/.tgbs-root/upper";
+	static const char work[] = "/run/.tgbs-root/work";
+	static const char merged[] = "/run/.tgbs-root/merged";
+	static const char old_root[] = "/run/.tgbs-root/merged/.tgbs-old-root";
+	static const char overlay_options[] =
+		"lowerdir=/,upperdir=/run/.tgbs-root/upper,"
+		"workdir=/run/.tgbs-root/work";
+
+	/* The staging tmpfs contains the private writable layer. It is mounted on
+	 * /run so creating its directories never modifies the host rootfs. */
+	if (mount("tmpfs", "/run", "tmpfs", MS_NOSUID | MS_NODEV,
+			"mode=0700") != 0)
+		return report_mount_error("unable to mount rootfs staging tmpfs at",
+			"/run");
+	if (mkdir_if_missing(stage, 0700) != 0 ||
+	    mkdir_if_missing(upper, 0700) != 0 ||
+	    mkdir_if_missing(work, 0700) != 0 ||
+	    mkdir_if_missing(merged, 0700) != 0)
+		return report_mount_error("unable to create rootfs staging directory at",
+			stage);
+
+	if (mount("overlay", merged, "overlay", 0, overlay_options) != 0)
+		return report_mount_error("unable to mount overlay root at", merged);
+	if (mkdir(old_root, 0700) != 0)
+		return report_mount_error("unable to create old-root mountpoint at",
+			old_root);
+	if (syscall(SYS_pivot_root, merged, old_root) != 0)
+		return report_mount_error("unable to pivot to overlay root at", merged);
+	if (chdir("/") != 0)
+		return report_mount_error("unable to enter overlay root at", "/");
+
+	/* Preserve the current device view for prototype compatibility. Since the
+	 * entire mount namespace is private, this bind cannot propagate back. */
+	if (mount("/.tgbs-old-root/dev", "/dev", NULL,
+			MS_BIND | MS_REC, NULL) != 0)
+		return report_mount_error("unable to expose host device view at", "/dev");
+
+	if (umount2("/.tgbs-old-root", MNT_DETACH) != 0)
+		return report_mount_error("unable to detach old root at",
+			"/.tgbs-old-root");
+	if (rmdir("/.tgbs-old-root") != 0)
+		return report_mount_error("unable to remove old-root mountpoint at",
+			"/.tgbs-old-root");
+	return 0;
+}
+
 static int setup_channel_mounts(const struct channel_mount_plan *plan)
 {
 	size_t i;
@@ -201,23 +250,35 @@ static int setup_container_mounts(const struct channel_mount_plan *plan)
 	/* Keep mounts created by the container from propagating to the host. */
 	if (mount(NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL) != 0)
 		return -1;
+	if (setup_overlay_root() != 0)
+		return -1;
 
+	/* Yocto keeps /tmp and /var/log below a volatile tmpfs mounted by init.
+	 * Submount contents are intentionally absent from an overlay lower layer,
+	 * so recreate the corresponding private directories in the upper layer. */
+	if (mkdir_if_missing("/var/volatile", 0755) != 0 ||
+	    mkdir_if_missing("/var/volatile/tmp", 01777) != 0 ||
+	    mkdir_if_missing("/var/volatile/log", 0755) != 0)
+		return report_mount_error("unable to prepare private volatile path at",
+			"/var/volatile");
 	if (mount("tmpfs", "/tmp", "tmpfs", MS_NOSUID | MS_NODEV,
 			"mode=1777") != 0)
-		return -1;
+		return report_mount_error("unable to mount private tmpfs at", "/tmp");
 	if (mount("tmpfs", "/run", "tmpfs", MS_NOSUID | MS_NODEV,
 			"mode=0755") != 0)
-		return -1;
+		return report_mount_error("unable to mount private tmpfs at", "/run");
+	if (mkdir_if_missing("/run/lock", 0755) != 0)
+		return report_mount_error("unable to create private runtime path at",
+			"/run/lock");
 	if (setup_channel_mounts(plan) != 0)
 		return -1;
 
-	/* The inherited cgroup2 mount belongs to the host cgroup namespace and
-	 * cannot be covered directly by another cgroup2 mount. Detach it from
-	 * this private mount namespace first; the new mount is then rooted at the
-	 * container's cgroup because the process is in a new cgroup namespace. */
-	if (umount2(CG_ROOT, MNT_DETACH) != 0)
-		return report_mount_error("unable to detach inherited cgroup view at",
-			CG_ROOT);
+	/* Expose host device information without allowing sysfs configuration. */
+	if (mount("sysfs", "/sys", "sysfs",
+			MS_RDONLY | MS_NOSUID | MS_NOEXEC | MS_NODEV, NULL) != 0)
+		return report_mount_error("unable to mount read-only sysfs at", "/sys");
+
+	/* In the new cgroup namespace this fresh mount is rooted at the domain. */
 	if (mount("cgroup2", CG_ROOT, "cgroup2",
 			MS_RDONLY | MS_NOSUID | MS_NOEXEC | MS_NODEV, NULL) != 0)
 		return report_mount_error("unable to mount private cgroup view at",
@@ -226,7 +287,7 @@ static int setup_container_mounts(const struct channel_mount_plan *plan)
 	/* Hide the inherited host procfs with one tied to this PID namespace. */
 	if (mount("proc", "/proc", "proc",
 			MS_NOSUID | MS_NOEXEC | MS_NODEV, NULL) != 0)
-		return -1;
+		return report_mount_error("unable to mount private procfs at", "/proc");
 	return 0;
 }
 

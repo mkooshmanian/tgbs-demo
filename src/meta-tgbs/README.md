@@ -38,10 +38,14 @@ tgbsctl set worker pids-max max
 
 `run` uses `clone3(CLONE_INTO_CGROUP)` to create the command directly in its
 configured TGBS cgroup and as PID 1 in new PID, mount, UTS, IPC, and cgroup
-namespaces. The root filesystem remains shared and writable, while mount
-propagation is private and `/proc`, `/tmp`, and `/run` are private mounts. The
-cgroup namespace makes the domain appear as `/` in `/proc/self/cgroup` and
-provides a read-only, domain-rooted cgroup2 view on `/sys/fs/cgroup`.
+namespaces. The host root filesystem is the read-only lower layer of an
+overlayfs whose writable upper layer lives in a private tmpfs. Applications see
+a writable root, but their changes are ephemeral and cannot overwrite regular
+host filesystem paths. Mount propagation is private; `/proc`, `/tmp`, and
+`/run` are private mounts, `/sys` is read-only, and `/dev` keeps the host device
+view for prototype compatibility. The cgroup namespace makes the domain appear
+as `/` in `/proc/self/cgroup` and provides a read-only, domain-rooted cgroup2
+view on `/sys/fs/cgroup`.
 After preparing these privileged resources and optionally setting the hostname,
 `tgbsctl` removes `CAP_SYS_ADMIN` from the command's capability sets and
 bounding set, then enables `no_new_privs` before `exec`.
@@ -155,8 +159,9 @@ namespaces hide unrelated channels and expose only the lock corresponding to
 the domain's role as writable. Container processes cannot alter this view
 because `CAP_SYS_ADMIN` is removed before the application starts. This does not
 yet form a complete security boundary: the processes still use the host root
-identity and the shared root filesystem remains writable. No credential
-passing or `SO_PASSCRED` is used.
+identity and retain the host device view. The overlay is intended to prevent
+accidental host filesystem modification, not to contain a malicious workload.
+No credential passing or `SO_PASSCRED` is used.
 
 ## Runtime monitor
 
