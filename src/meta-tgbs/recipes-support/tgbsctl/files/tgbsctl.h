@@ -42,6 +42,24 @@ enum domain_state {
 	STATE_STALE
 };
 
+enum channel_mount_role {
+	CHANNEL_MOUNT_SOURCE = 1,
+	CHANNEL_MOUNT_DESTINATION = 2
+};
+
+struct channel_mount_entry {
+	char name[CHANNEL_NAME_SIZE];
+	enum channel_mount_role role;
+	int channel_fd;
+	int endpoint_fd;
+	int source_lock_fd;
+};
+
+struct channel_mount_plan {
+	struct channel_mount_entry *entries;
+	size_t count;
+};
+
 /* --- utilities defined in tgbsctl.c --- */
 
 void usage(const char *prog);
@@ -94,9 +112,12 @@ int cmd_channel(int argc, char **argv);
 int channel_topology_lock(int exclusive);
 void channel_topology_unlock(int fd);
 
-/* Validate every channel contract attached to DOMAIN while the topology lock
- * is held. */
-int channel_validate_domain(const char *domain);
+/* Validate the channel topology and retain detached mount descriptors for
+ * every channel attached to DOMAIN. The topology lock must remain held until
+ * the descriptors have been consumed by the child mount namespace. */
+int channel_mount_plan_prepare(const char *domain,
+	struct channel_mount_plan *plan);
+void channel_mount_plan_close(struct channel_mount_plan *plan);
 
 /* --- observe helpers defined in observe.c (read-only) --- */
 

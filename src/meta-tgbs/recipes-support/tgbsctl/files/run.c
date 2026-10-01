@@ -10,6 +10,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <getopt.h>
+#include <linux/mount.h>
 #include <linux/sched.h>
 #include <signal.h>
 #include <stdio.h>
@@ -27,11 +28,145 @@ static void signal_handler(int sig)
 	g_signal = sig;
 }
 
-static int setup_container_mounts(void)
+static int mkdir_if_missing(const char *path, mode_t mode)
+{
+	if (mkdir(path, mode) == 0 || errno == EEXIST)
+		return 0;
+	return -1;
+}
+
+static int move_mount_to_path(int fd, const char *target)
+{
+	return (int)syscall(SYS_move_mount, fd, "", AT_FDCWD, target,
+		MOVE_MOUNT_F_EMPTY_PATH);
+}
+
+static int remount_bind(const char *path, int read_only)
+{
+	unsigned long flags = MS_REMOUNT | MS_BIND | MS_NOSUID | MS_NODEV |
+		MS_NOEXEC;
+
+	if (read_only)
+		flags |= MS_RDONLY;
+	return mount(NULL, path, NULL, flags, NULL);
+}
+
+static int report_mount_error(const char *operation, const char *path)
+{
+	int saved_errno = errno;
+
+	fprintf(stderr, "tgbsctl: ERROR - %s %s: %s\n",
+		operation, path, strerror(saved_errno));
+	errno = saved_errno;
+	return -1;
+}
+
+static int setup_channel_mounts(const struct channel_mount_plan *plan)
+{
+	size_t i;
+
+	if (mkdir_if_missing(RUN_ROOT, 0755) != 0 ||
+	    mkdir_if_missing(CHANNEL_ROOT, 0755) != 0)
+		return -1;
+
+	/* Create every mountpoint before making the channel index immutable. */
+	for (i = 0; i < plan->count; i++) {
+		char target[PATH_MAX];
+
+		if (snprintf(target, sizeof(target), "%s/%s", CHANNEL_ROOT,
+				plan->entries[i].name) >= (int)sizeof(target)) {
+			errno = ENAMETOOLONG;
+			return -1;
+		}
+		if (mkdir(target, 0755) != 0)
+			return -1;
+	}
+
+	/* Prevent applications from adding channel names to the private index. */
+	if (mount(CHANNEL_ROOT, CHANNEL_ROOT, NULL, MS_BIND, NULL) != 0)
+		return report_mount_error("unable to bind channel index at", CHANNEL_ROOT);
+	if (remount_bind(CHANNEL_ROOT, 1) != 0)
+		return report_mount_error("unable to make channel index read-only at",
+			CHANNEL_ROOT);
+
+	for (i = 0; i < plan->count; i++) {
+		const struct channel_mount_entry *entry = &plan->entries[i];
+		char target[PATH_MAX];
+		char endpoint[PATH_MAX];
+		char source_lock[PATH_MAX];
+
+		if (snprintf(target, sizeof(target), "%s/%s", CHANNEL_ROOT,
+				entry->name) >= (int)sizeof(target) ||
+		    snprintf(endpoint, sizeof(endpoint), "%s/endpoint", target) >=
+				(int)sizeof(endpoint) ||
+		    snprintf(source_lock, sizeof(source_lock), "%s/source.lock",
+				endpoint) >= (int)sizeof(source_lock)) {
+			errno = ENAMETOOLONG;
+			return -1;
+		}
+
+		/* Contracts and lifetime locks are always exposed read-only. */
+		if (move_mount_to_path(entry->channel_fd, target) != 0)
+			return report_mount_error("unable to expose channel at", target);
+		if (remount_bind(target, 1) != 0)
+			return report_mount_error("unable to make channel read-only at",
+				target);
+
+		if (entry->role == CHANNEL_MOUNT_SOURCE) {
+			/* The source may lock source.lock and send to the socket, but
+			 * cannot create, replace, or remove the receiver endpoint. */
+			if (move_mount_to_path(entry->source_lock_fd, source_lock) != 0)
+				return report_mount_error("unable to expose source lock at",
+					source_lock);
+			if (remount_bind(source_lock, 0) != 0)
+				return report_mount_error("unable to make source lock writable at",
+					source_lock);
+		} else {
+			/* The destination owns the writable endpoint. Mask source.lock
+			 * with a read-only file mount so it cannot claim both roles. */
+			if (move_mount_to_path(entry->endpoint_fd, endpoint) != 0)
+				return report_mount_error("unable to expose destination endpoint at",
+					endpoint);
+			if (remount_bind(endpoint, 0) != 0)
+				return report_mount_error("unable to make destination endpoint writable at",
+					endpoint);
+			if (move_mount_to_path(entry->source_lock_fd, source_lock) != 0)
+				return report_mount_error("unable to mask destination source lock at",
+					source_lock);
+			if (remount_bind(source_lock, 1) != 0)
+				return report_mount_error("unable to make destination source lock read-only at",
+					source_lock);
+		}
+	}
+	return 0;
+}
+
+static int setup_container_mounts(const struct channel_mount_plan *plan)
 {
 	/* Keep mounts created by the container from propagating to the host. */
 	if (mount(NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL) != 0)
 		return -1;
+
+	if (mount("tmpfs", "/tmp", "tmpfs", MS_NOSUID | MS_NODEV,
+			"mode=1777") != 0)
+		return -1;
+	if (mount("tmpfs", "/run", "tmpfs", MS_NOSUID | MS_NODEV,
+			"mode=0755") != 0)
+		return -1;
+	if (setup_channel_mounts(plan) != 0)
+		return -1;
+
+	/* The inherited cgroup2 mount belongs to the host cgroup namespace and
+	 * cannot be covered directly by another cgroup2 mount. Detach it from
+	 * this private mount namespace first; the new mount is then rooted at the
+	 * container's cgroup because the process is in a new cgroup namespace. */
+	if (umount2(CG_ROOT, MNT_DETACH) != 0)
+		return report_mount_error("unable to detach inherited cgroup view at",
+			CG_ROOT);
+	if (mount("cgroup2", CG_ROOT, "cgroup2",
+			MS_RDONLY | MS_NOSUID | MS_NOEXEC | MS_NODEV, NULL) != 0)
+		return report_mount_error("unable to mount private cgroup view at",
+			CG_ROOT);
 
 	/* Hide the inherited host procfs with one tied to this PID namespace. */
 	if (mount("proc", "/proc", "proc",
@@ -44,7 +179,7 @@ static pid_t clone_container_into_cgroup(int cgroup_fd)
 {
 	struct clone_args args = {
 		.flags = CLONE_INTO_CGROUP | CLONE_NEWPID | CLONE_NEWNS |
-			CLONE_NEWUTS | CLONE_NEWIPC,
+			CLONE_NEWUTS | CLONE_NEWIPC | CLONE_NEWCGROUP,
 		.exit_signal = SIGCHLD,
 		.cgroup = (unsigned long long)cgroup_fd,
 	};
@@ -145,6 +280,7 @@ int cmd_run(int argc, char **argv)
 	struct sigaction sa;
 	int topology_fd = -1;
 	int cgroup_fd = -1;
+	struct channel_mount_plan channel_mounts = {0};
 
 	/* The 'run' subcommand is argv[1]; options follow it. Start getopt at
 	 * argv[2] so 'run' is skipped; the command is whatever getopt leaves at
@@ -224,7 +360,7 @@ int cmd_run(int argc, char **argv)
 	topology_fd = channel_topology_lock(0);
 	if (topology_fd < 0)
 		error_exit("unable to lock the channel topology: %s", strerror(errno));
-	if (channel_validate_domain(name) != 0) {
+	if (channel_mount_plan_prepare(name, &channel_mounts) != 0) {
 		int saved_errno = errno;
 
 		channel_topology_unlock(topology_fd);
@@ -324,6 +460,7 @@ int cmd_run(int argc, char **argv)
 		int saved_errno = errno;
 
 		close(cgroup_fd);
+		channel_mount_plan_close(&channel_mounts);
 		cleanup_run(name);
 		errno = saved_errno;
 		error_exit("clone3 into cgroup %s failed: %s", name_path,
@@ -331,14 +468,20 @@ int cmd_run(int argc, char **argv)
 	}
 
 	if (pid == 0) {
+		int setup_errno;
+
 		close(cgroup_fd);
-		channel_topology_unlock(topology_fd);
-		if (setup_container_mounts() != 0) {
+		if (setup_container_mounts(&channel_mounts) != 0) {
+			setup_errno = errno;
+			channel_mount_plan_close(&channel_mounts);
+			channel_topology_unlock(topology_fd);
 			fprintf(stderr,
 				"tgbsctl: ERROR - unable to prepare container mounts: %s\n",
-				strerror(errno));
+				strerror(setup_errno));
 			_exit(127);
 		}
+		channel_mount_plan_close(&channel_mounts);
+		channel_topology_unlock(topology_fd);
 		execvp(argv[cmd_index], &argv[cmd_index]);
 		fprintf(stderr, "tgbsctl: ERROR - failed to execute '%s': %s\n",
 			argv[cmd_index], strerror(errno));
@@ -346,6 +489,7 @@ int cmd_run(int argc, char **argv)
 	}
 
 	close(cgroup_fd);
+	channel_mount_plan_close(&channel_mounts);
 	channel_topology_unlock(topology_fd);
 	topology_fd = -1;
 

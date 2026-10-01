@@ -5,7 +5,7 @@
  *
  * The "run" command creates a TGBS cgroup directly under /sys/fs/cgroup,
  * configures its temporal contract, and starts a command as PID 1 inside new
- * PID, mount, UTS, and IPC namespaces. A volatile marker under /run/tgbs
+ * PID, mount, UTS, IPC, and cgroup namespaces. A volatile marker under /run/tgbs
  * records the main process identity so that "list" and "inspect" can correlate
  * userspace processes with their TGBS cgroup. The channel commands manage
  * immutable communication contracts below /run/tgbs/channels.
@@ -56,8 +56,9 @@ void usage(const char *prog)
 		"  %s channel delete NAME\n"
 		"\n"
 		"Commands:\n"
-		"  run      Run COMMAND as PID 1 in isolated PID, mount, UTS, and IPC\n"
-		"           namespaces and in a TGBS cgroup named NAME under %s.\n"
+		"  run      Run COMMAND as PID 1 in isolated PID, mount, UTS, IPC, and\n"
+		"           cgroup namespaces, with private /tmp and /run mounts,\n"
+		"           in a TGBS cgroup named NAME under %s.\n"
 		"           Run options must follow 'run' and precede COMMAND.\n"
 		"           RUNTIME and PERIOD are in microseconds and must satisfy\n"
 		"           0 < RUNTIME <= PERIOD.\n"

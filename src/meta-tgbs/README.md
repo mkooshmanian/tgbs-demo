@@ -33,11 +33,18 @@ tgbsctl set worker reclaim true
 ```
 
 `run` uses `clone3(CLONE_INTO_CGROUP)` to create the command directly in its
-configured TGBS cgroup and as PID 1 in new PID, mount, UTS, and IPC namespaces.
-The mount namespace initially shares the host root filesystem, then makes its
-mount propagation private and mounts a new `procfs` on `/proc` for the
-container's PID namespace. Other paths, including `/run/tgbs`, still expose
-the same underlying filesystem at this stage.
+configured TGBS cgroup and as PID 1 in new PID, mount, UTS, IPC, and cgroup
+namespaces. The root filesystem remains shared and writable, while mount
+propagation is private and `/proc`, `/tmp`, and `/run` are private mounts. The
+cgroup namespace makes the domain appear as `/` in `/proc/self/cgroup` and
+provides a read-only, domain-rooted cgroup2 view on `/sys/fs/cgroup`.
+
+The private `/run/tgbs/channels` contains only channels whose source or
+destination matches the domain. Contracts and lifetime locks are read-only.
+For a source, `source.lock` is writable while the endpoint directory is
+read-only; for a destination, the endpoint and `receiver.lock` are writable
+while `source.lock` is read-only. Both views refer to the same underlying
+AF_UNIX socket directory.
 
 CPU placement uses the standard `cpuset.cpus` CPU-list syntax. `inherit`
 restores the cgroup root's current effective CPU list; this works for populated
@@ -129,11 +136,11 @@ messages. Consequently the first version deliberately has no
 `max_nb_message` contract. `tgbs_channel_get_status()` reports only whether
 a message is pending and the size of the next message.
 
-The endpoint locks enforce one cooperative `libtgbscomm` source and one
-destination; they cannot constrain a program that bypasses the library.
-Until mount-namespace support exposes only the appropriate paths to each
-container, direction and exclusivity are runtime properties rather than a
-security boundary. No credential passing or `SO_PASSCRED` is used.
+The endpoint locks enforce one `libtgbscomm` source and one destination. Mount
+namespaces hide unrelated channels and expose only the lock corresponding to
+the domain's role as writable. This remains a nominal boundary while container
+processes retain `CAP_SYS_ADMIN`, since they can alter their own mount table.
+No credential passing or `SO_PASSCRED` is used.
 
 ## Runtime monitor
 

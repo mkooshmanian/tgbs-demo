@@ -12,11 +12,13 @@
 #include <fcntl.h>
 #include <getopt.h>
 #include <limits.h>
+#include <linux/mount.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/file.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <unistd.h>
 
 #define CONTRACT_FORMAT 1
@@ -727,10 +729,48 @@ out_topology:
 	return rc;
 }
 
-int channel_validate_domain(const char *domain)
+void channel_mount_plan_close(struct channel_mount_plan *plan)
+{
+	size_t i;
+
+	if (plan == NULL)
+		return;
+	for (i = 0; i < plan->count; i++) {
+		if (plan->entries[i].channel_fd >= 0)
+			close(plan->entries[i].channel_fd);
+		if (plan->entries[i].endpoint_fd >= 0)
+			close(plan->entries[i].endpoint_fd);
+		if (plan->entries[i].source_lock_fd >= 0)
+			close(plan->entries[i].source_lock_fd);
+	}
+	free(plan->entries);
+	plan->entries = NULL;
+	plan->count = 0;
+}
+
+static int open_channel_mount_path(const char *name, const char *suffix)
+{
+	char path[PATH_MAX];
+
+	if (make_channel_path(path, sizeof(path), name, suffix) != 0)
+		return -1;
+	return (int)syscall(SYS_open_tree, AT_FDCWD, path,
+		OPEN_TREE_CLONE | OPEN_TREE_CLOEXEC | AT_NO_AUTOMOUNT |
+		AT_SYMLINK_NOFOLLOW);
+}
+
+int channel_mount_plan_prepare(const char *domain,
+		struct channel_mount_plan *plan)
 {
 	DIR *dir;
 	struct dirent *entry;
+	int saved_errno;
+
+	if (domain == NULL || plan == NULL) {
+		errno = EINVAL;
+		return -1;
+	}
+	memset(plan, 0, sizeof(*plan));
 
 	dir = opendir(CHANNEL_ROOT);
 	if (dir == NULL) {
@@ -740,22 +780,70 @@ int channel_validate_domain(const char *domain)
 	}
 	while ((entry = readdir(dir)) != NULL) {
 		struct channel_contract contract;
+		struct channel_mount_entry mount_entry = {
+			.channel_fd = -1,
+			.endpoint_fd = -1,
+			.source_lock_fd = -1,
+		};
+		struct channel_mount_entry *new_entries;
 
 		if (entry->d_name[0] == '.')
 			continue;
 		if (read_contract(entry->d_name, &contract) != 0) {
-			closedir(dir);
 			errno = EINVAL;
-			return -1;
+			goto error;
 		}
-		if (strcmp(contract.source, domain) == 0 ||
-		    strcmp(contract.destination, domain) == 0) {
-			/* Reading the complete contract is the validation. Mount
-			 * preparation will be added here with namespace support. */
+		if (strcmp(contract.source, domain) == 0)
+			mount_entry.role = CHANNEL_MOUNT_SOURCE;
+		else if (strcmp(contract.destination, domain) == 0)
+			mount_entry.role = CHANNEL_MOUNT_DESTINATION;
+		else
+			continue;
+
+		snprintf(mount_entry.name, sizeof(mount_entry.name), "%s",
+			contract.name);
+		mount_entry.channel_fd = open_channel_mount_path(contract.name, "");
+		if (mount_entry.channel_fd < 0)
+			goto entry_error;
+		mount_entry.source_lock_fd = open_channel_mount_path(contract.name,
+			SOURCE_LOCK);
+		if (mount_entry.source_lock_fd < 0)
+			goto entry_error;
+		if (mount_entry.role == CHANNEL_MOUNT_DESTINATION) {
+			mount_entry.endpoint_fd = open_channel_mount_path(contract.name,
+				ENDPOINT_DIR);
+			if (mount_entry.endpoint_fd < 0)
+				goto entry_error;
 		}
+
+		new_entries = realloc(plan->entries,
+			(plan->count + 1) * sizeof(*plan->entries));
+		if (new_entries == NULL)
+			goto entry_error;
+		plan->entries = new_entries;
+		plan->entries[plan->count++] = mount_entry;
+		continue;
+
+entry_error:
+		saved_errno = errno;
+		if (mount_entry.channel_fd >= 0)
+			close(mount_entry.channel_fd);
+		if (mount_entry.endpoint_fd >= 0)
+			close(mount_entry.endpoint_fd);
+		if (mount_entry.source_lock_fd >= 0)
+			close(mount_entry.source_lock_fd);
+		errno = saved_errno;
+		goto error;
 	}
 	closedir(dir);
 	return 0;
+
+error:
+	saved_errno = errno;
+	closedir(dir);
+	channel_mount_plan_close(plan);
+	errno = saved_errno;
+	return -1;
 }
 
 int cmd_channel(int argc, char **argv)
