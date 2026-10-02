@@ -59,8 +59,8 @@ AF_UNIX socket directory. A domain may be both the source and destination of a
 channel; in that case both role-specific views are writable, allowing a local
 loopback channel without changing the application interface. For sampling,
 the source owns the writable endpoint and destinations see it read-only;
-`source.lock` is writable only for the source. Sampling data operations are
-unsupported and return `ENOTSUP`.
+`source.lock` is writable only for the source. All sampling participants share
+the same directory containing the latest published message.
 
 CPU placement uses the standard `cpuset.cpus` CPU-list syntax. `inherit`
 restores the cgroup root's current effective CPU list; this works for populated
@@ -160,8 +160,8 @@ messages. Queuing contracts do not include `max_nb_message`.
 `tgbs_queuing_channel_get_status()` reports whether a message is pending and
 the size of the next message.
 
-The endpoint locks enforce one `libtgbscomm` source and one destination. Mount
-namespaces hide unrelated channels and expose only the lock corresponding to
+For queuing, the endpoint locks enforce one `libtgbscomm` source and one
+destination. Mount namespaces hide unrelated channels and expose only the lock corresponding to
 the domain's role as writable. Container processes cannot alter this view
 because `CAP_SYS_ADMIN` is removed before the application starts. This does not
 form a complete security boundary: the processes use the host root identity
@@ -196,17 +196,64 @@ rejects a refresh period. Both types support message sizes up to
 `INT_MAX - 32` bytes.
 
 `list` and `inspect` show the type, all destinations, and the sampling refresh
-period. Creation and deletion check every participant's cgroup. Sampling
-creates the contract, `lifetime.lock`, and `endpoint/source.lock`; it does not
-create a receiver lock, socket, or sample file.
+period and whether the data endpoint is present. Creation and deletion check
+every participant's cgroup. Sampling creates the contract, `lifetime.lock`, and
+`endpoint/source.lock`. The `endpoint/sample` file appears on the first
+publication; there is no receiver lock or socket.
 
-The sampling API declares an opaque `tgbs_sampling_channel_t`, with
+The sampling API uses an opaque `tgbs_sampling_channel_t`, with
 `tgbs_sampling_channel_open()`, `write()`, `read()`, and `close()` functions
-(all prefixed `tgbs_sampling_channel_`). Sampling supports contract management
-and role-specific mounts. Opening a valid sampling contract returns `ENOTSUP`,
-leaves the handle NULL, releases the lifetime lock, and creates no data
-endpoint. Message publication, reading, and freshness evaluation are
-unsupported.
+(all prefixed `tgbs_sampling_channel_`). Processes may open the same source or
+destination independently, or use handles inherited through `fork()`. Each
+handle holds a shared lifetime lock and uses close-on-exec descriptors.
+
+The sample file contains an unsigned 64-bit little-endian `CLOCK_MONOTONIC`
+timestamp in nanoseconds, followed by the message bytes. The message length
+is the file size minus the 8-byte timestamp. The maximum size in the contract
+applies to the message alone. The clock is shared by the TGBS domains and is
+unaffected by changes to the system's wall-clock time.
+
+Each write takes `source.lock` for the duration of publication, writes a unique
+temporary file in the endpoint directory, records the timestamp after copying
+the payload, and atomically replaces `sample` with `renameat()`. The published
+file is read-only and is never modified in place by the library. Concurrent
+source processes or threads are serialized; readers do not take a lock. A
+reader opens `sample` for each call and obtains both its size and contents
+from that descriptor, so it sees a complete version even during publication.
+Reads do not consume the message or refresh its timestamp.
+
+A read succeeds with `TGBS_SAMPLING_VALID` when the message age is strictly
+less than `refresh_period_us`. An expired message remains readable, with
+`TGBS_SAMPLING_INVALID`. Before the first publication, reads return `ENODATA`.
+A buffer that is too small returns `EMSGSIZE` and the required message length;
+the stored value is unchanged. Invalid file sizes or timestamps return
+`EPROTO`. Read on a source or write on a destination returns `EINVAL`.
+
+```c
+#include <tgbs/sampling.h>
+
+tgbs_sampling_channel_t *rx;
+unsigned char message[256];
+size_t length;
+tgbs_sampling_validity_t validity;
+
+if (tgbs_sampling_channel_open("position", TGBS_CHANNEL_DESTINATION, &rx) == -1)
+        /* handle errno */;
+
+if (tgbs_sampling_channel_read(rx, message, sizeof(message), &length, &validity) == -1)
+        /* handle errno */;
+else if (validity == TGBS_SAMPLING_INVALID)
+        /* handle expired data */;
+
+tgbs_sampling_channel_close(rx);
+```
+
+Closing a handle does not remove the last value, including when the producer
+exits. The value expires according to its timestamp. Failed writes before
+publication preserve the previous value. A process killed while preparing a
+publication may leave a `.sample.tmp-` file; deleting an unused channel removes
+its sample and reserved temporary files. Unrelated endpoint files are not
+removed. Channel data lives under `/run` and is volatile across reboots.
 
 ## Runtime monitor
 

@@ -6,6 +6,8 @@
 
 #define _GNU_SOURCE
 #include "tgbsctl.h"
+#include "queuing-format.h"
+#include "sampling-format.h"
 
 #include <dirent.h>
 #include <errno.h>
@@ -23,7 +25,6 @@
 
 #define CONTRACT_FILE "/contract"
 #define ENDPOINT_DIR "/endpoint"
-#define CHANNEL_SOCKET "/endpoint/channel.sock"
 #define SOURCE_LOCK "/endpoint/source.lock"
 #define RECEIVER_LOCK "/endpoint/receiver.lock"
 #define LIFETIME_LOCK "/lifetime.lock"
@@ -256,9 +257,81 @@ static int channel_socket_exists(const char *name)
 	char path[PATH_MAX];
 	struct stat st;
 
-	if (make_channel_path(path, sizeof(path), name, CHANNEL_SOCKET) != 0)
+	if (make_channel_path(path, sizeof(path), name, TGBS_QUEUING_SOCKET) != 0)
 		return 0;
 	return lstat(path, &st) == 0 && S_ISSOCK(st.st_mode);
+}
+
+static int channel_sample_exists(const char *name)
+{
+	char path[PATH_MAX];
+	struct stat st;
+
+	if (make_channel_path(path, sizeof(path), name, TGBS_SAMPLING_FILE) != 0)
+		return 0;
+	return lstat(path, &st) == 0 && S_ISREG(st.st_mode);
+}
+
+/* Called only with exclusive topology/lifetime locks and inactive participants.
+ * Remove the published sample and exact temporary names left by crashed writers;
+ * unrelated files are never removed. */
+static int remove_sampling_files(const char *name)
+{
+	char path[PATH_MAX];
+	DIR *dir;
+	int saved_errno = 0;
+	int deleting = 0;
+
+	if (make_channel_path(path, sizeof(path), name, ENDPOINT_DIR) != 0)
+		return -1;
+	dir = opendir(path);
+	if (dir == NULL)
+		return -1;
+	for (;;) {
+		struct dirent *entry;
+		struct stat st;
+
+		errno = 0;
+		entry = readdir(dir);
+		if (entry == NULL) {
+			saved_errno = errno;
+			if (saved_errno == 0 && !deleting) {
+				/* Validate the complete directory before removing any data. */
+				deleting = 1;
+				rewinddir(dir);
+				continue;
+			}
+			break;
+		}
+		if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
+			continue;
+		if (strcmp(entry->d_name, "source.lock") != 0 &&
+		    strcmp(entry->d_name, TGBS_SAMPLING_FILE_NAME) != 0 &&
+		    !tgbs_sampling_is_temporary(entry->d_name)) {
+			saved_errno = ENOTEMPTY;
+			break;
+		}
+		if (fstatat(dirfd(dir), entry->d_name, &st, AT_SYMLINK_NOFOLLOW) != 0) {
+			saved_errno = errno;
+			break;
+		}
+		if (!S_ISREG(st.st_mode)) {
+			saved_errno = EINVAL;
+			break;
+		}
+		if (deleting && strcmp(entry->d_name, "source.lock") != 0 &&
+		    unlinkat(dirfd(dir), entry->d_name, 0) != 0) {
+			saved_errno = errno;
+			break;
+		}
+	}
+	if (closedir(dir) != 0 && saved_errno == 0)
+		saved_errno = errno;
+	if (saved_errno != 0) {
+		errno = saved_errno;
+		return -1;
+	}
+	return 0;
 }
 
 static int remove_if_exists(const char *path)
@@ -474,7 +547,7 @@ static int list_channels(void)
 
 	printf("%-20s %-8s %-20s %-12s %-12s %-8s %-8s %s\n",
 		"NAME", "TYPE", "SOURCE", "MAX_BYTES", "REFRESH_US",
-		"OPEN", "SOCKET", "DESTINATIONS");
+		"OPEN", "ENDPOINT", "DESTINATIONS");
 	while ((entry = readdir(dir)) != NULL) {
 		struct tgbs_channel_contract contract;
 		char refresh[32] = "-";
@@ -494,7 +567,8 @@ static int list_channels(void)
 			contract.source, contract.max_message_size, refresh,
 			open_handles > 0 ? "yes" : open_handles == 0 ? "no" : "?",
 			contract.type == TGBS_CONTRACT_QUEUING ?
-				(channel_socket_exists(entry->d_name) ? "present" : "absent") : "-");
+				(channel_socket_exists(entry->d_name) ? "present" : "absent") :
+				(channel_sample_exists(entry->d_name) ? "present" : "absent"));
 		print_destinations(&contract);
 		putchar('\n');
 	}
@@ -544,7 +618,7 @@ static int inspect_channel(const char *name)
 		printf("Channel socket:   %s\n",
 			channel_socket_exists(name) ? "present" : "absent");
 	else
-		printf("Sampling backend: not implemented\n");
+		printf("Sample file:      %s\n", channel_sample_exists(name) ? "present" : "absent");
 	if (active > 0)
 		printf("Active domain:    %s\n", active_name);
 	else if (active == 0)
@@ -607,7 +681,7 @@ static int delete_channel(const char *name)
 		goto delete_error;
 
 	if (contract.type == TGBS_CONTRACT_QUEUING) {
-		if (make_channel_path(path, sizeof(path), name, CHANNEL_SOCKET) != 0)
+		if (make_channel_path(path, sizeof(path), name, TGBS_QUEUING_SOCKET) != 0)
 			goto delete_error;
 		if (lstat(path, &st) == 0) {
 			if (!S_ISSOCK(st.st_mode)) {
@@ -619,6 +693,8 @@ static int delete_channel(const char *name)
 		} else if (errno != ENOENT) {
 			goto delete_error;
 		}
+	} else if (remove_sampling_files(name) != 0) {
+		goto delete_error;
 	}
 	if (make_channel_path(path, sizeof(path), name, SOURCE_LOCK) != 0 ||
 	    remove_if_exists(path) != 0)

@@ -6,6 +6,7 @@
 #define _GNU_SOURCE
 #include "queuing.h"
 #include "comm-internal.h"
+#include "queuing-format.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -22,7 +23,6 @@
 
 #define SOURCE_LOCK "/endpoint/source.lock"
 #define RECEIVER_LOCK "/endpoint/receiver.lock"
-#define CHANNEL_SOCKET "/endpoint/channel.sock"
 
 struct tgbs_queuing_channel {
 	int fd;
@@ -166,7 +166,7 @@ int tgbs_queuing_channel_open(const char *name, tgbs_channel_direction_t directi
 	channel->max_message_size = (size_t)contract.max_message_size;
 
 	if (tgbs_comm_make_path(socket_path, sizeof(socket_path),
-			name, CHANNEL_SOCKET) != 0)
+			name, TGBS_QUEUING_SOCKET) != 0)
 		goto error;
 	if (strlen(socket_path) >= sizeof(channel->socket_path)) {
 		errno = ENAMETOOLONG;

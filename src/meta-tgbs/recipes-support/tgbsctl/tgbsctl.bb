@@ -5,7 +5,7 @@ LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda
 
 FILESEXTRAPATHS:prepend := "${THISDIR}/../channel-common/files:"
 
-SRC_URI = "file://tgbsctl.c file://tgbsctl.h file://run.c file://observe.c file://control.c file://channel.c file://channel-contract.c file://channel-contract.h"
+SRC_URI = "file://tgbsctl.c file://tgbsctl.h file://run.c file://observe.c file://control.c file://channel.c file://channel-contract.c file://channel-contract.h file://queuing-format.h file://sampling-format.h"
 
 S = "${WORKDIR}"
 

@@ -85,7 +85,7 @@ void usage(const char *prog)
 		"           TYPE is required: queuing or sampling.\n"
 		"           Queuing requires exactly one destination.\n"
 		"           Sampling requires REFRESH_PERIOD in microseconds and allows\n"
-		"           up to 64 distinct destinations. Its data backend is pending.\n",
+		"           up to 64 distinct destinations.\n",
 		prog, prog, prog, prog, prog, prog, prog, prog, prog, prog,
 		prog, prog, prog, prog, prog, prog, CG_ROOT);
 }
