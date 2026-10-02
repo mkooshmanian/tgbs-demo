@@ -29,16 +29,21 @@ or press Ctrl-D to leave it; `tgbsctl` then removes the domain.
 
 ## Communication channels
 
-`tgbs-demo-comm` creates two domains and two unidirectional channels:
+`tgbs-demo-comm` creates three domains, two queuing channels and one sampling
+channel:
 
 ```text
 comm-a --comm-a-to-b--> comm-b
 comm-a <--comm-b-to-a-- comm-b
+comm-c --comm-c-to-ab--> comm-a, comm-b  (sampling)
 ```
 
-The initiator sends one ping per second and the responder returns a pong. Both
-domains run in the background and write separately to
-`/var/log/tgbs-demo/comm-a.log` and `comm-b.log`:
+The initiator sends one ping per second and the responder returns a pong.
+`comm-c` publishes a numbered sample every second. Both `comm-a` and `comm-b`
+read the latest sample every 500 ms independently of their queuing exchanges,
+and log its `VALID` or `INVALID` freshness. The refresh period is 2 seconds.
+All three domains run in the background and write separately to
+`/var/log/tgbs-demo/comm-a.log`, `comm-b.log` and `comm-c.log`:
 
 ```sh
 tgbs-demo-comm start
@@ -46,8 +51,17 @@ tgbs-demo-comm logs
 tgbs-demo-comm stop
 ```
 
-`logs` follows both files with `tail -f`. The `stop` command stops the two
-domains before deleting their channels.
+`logs` follows all three files with `tail -f`. The `stop` command stops all
+three domains before deleting their channels.
+
+To check expiry without consuming or deleting the sample, freeze the producer:
+
+```sh
+tgbsctl pause comm-c
+# After 2 seconds, both subscribers report INVALID for the last sample.
+tgbsctl resume comm-c
+# Publication resumes and both subscribers report VALID again.
+```
 
 ## Mixed RT timeline
 

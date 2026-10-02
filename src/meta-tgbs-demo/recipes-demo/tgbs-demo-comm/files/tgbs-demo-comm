@@ -4,17 +4,21 @@ set -eu
 
 DOMAIN_A="comm-a"
 DOMAIN_B="comm-b"
+DOMAIN_C="comm-c"
 CHANNEL_A_TO_B="comm-a-to-b"
 CHANNEL_B_TO_A="comm-b-to-a"
+CHANNEL_C_TO_AB="comm-c-to-ab"
 ENTRYPOINT="/usr/libexec/tgbs-demo/comm-node"
 LOG_DIR="/var/log/tgbs-demo"
 LOG_A="${LOG_DIR}/comm-a.log"
 LOG_B="${LOG_DIR}/comm-b.log"
+LOG_C="${LOG_DIR}/comm-c.log"
 
 RUNTIME_US=10000
 PERIOD_US=100000
 CPUS="0"
 MAX_MESSAGE_SIZE=128
+REFRESH_PERIOD_US=2000000
 
 usage()
 {
@@ -27,6 +31,7 @@ Usage:
 Logs:
   ${LOG_A}
   ${LOG_B}
+  ${LOG_C}
 EOF
 }
 
@@ -51,7 +56,8 @@ wait_for_domains_to_stop()
 {
     count=0
     while [ "${count}" -lt 50 ]; do
-        if ! domain_exists "${DOMAIN_A}" && ! domain_exists "${DOMAIN_B}"; then
+        if ! domain_exists "${DOMAIN_A}" && ! domain_exists "${DOMAIN_B}" &&
+           ! domain_exists "${DOMAIN_C}"; then
             return 0
         fi
         count=$((count + 1))
@@ -63,8 +69,10 @@ wait_for_domains_to_stop()
 start()
 {
     if domain_exists "${DOMAIN_A}" || domain_exists "${DOMAIN_B}" ||
+       domain_exists "${DOMAIN_C}" ||
        channel_exists "${CHANNEL_A_TO_B}" ||
-       channel_exists "${CHANNEL_B_TO_A}"; then
+       channel_exists "${CHANNEL_B_TO_A}" ||
+       channel_exists "${CHANNEL_C_TO_AB}"; then
         echo "tgbs-demo-comm: the demo is already active or was not cleaned up" >&2
         echo "Run 'tgbs-demo-comm stop' before starting it again." >&2
         return 1
@@ -73,6 +81,7 @@ start()
     mkdir -p "${LOG_DIR}"
     : > "${LOG_A}"
     : > "${LOG_B}"
+    : > "${LOG_C}"
 
     tgbsctl channel create \
         --type queuing \
@@ -91,13 +100,26 @@ start()
         return 1
     fi
 
+    if ! tgbsctl channel create \
+        --type sampling \
+        --name "${CHANNEL_C_TO_AB}" \
+        --source "${DOMAIN_C}" \
+        --destination "${DOMAIN_A}" \
+        --destination "${DOMAIN_B}" \
+        --max-message-size "${MAX_MESSAGE_SIZE}" \
+        --refresh-period-us "${REFRESH_PERIOD_US}"; then
+        tgbsctl channel delete "${CHANNEL_B_TO_A}" >/dev/null 2>&1 || true
+        tgbsctl channel delete "${CHANNEL_A_TO_B}" >/dev/null 2>&1 || true
+        return 1
+    fi
+
     tgbsctl run \
         --name "${DOMAIN_A}" \
         --runtime-us "${RUNTIME_US}" \
         --period-us "${PERIOD_US}" \
         --cpus "${CPUS}" \
         "${ENTRYPOINT}" initiator "${DOMAIN_A}" \
-        "${CHANNEL_B_TO_A}" "${CHANNEL_A_TO_B}" \
+        "${CHANNEL_B_TO_A}" "${CHANNEL_A_TO_B}" "${CHANNEL_C_TO_AB}" \
         >>"${LOG_A}" 2>&1 &
 
     tgbsctl run \
@@ -106,12 +128,20 @@ start()
         --period-us "${PERIOD_US}" \
         --cpus "${CPUS}" \
         "${ENTRYPOINT}" responder "${DOMAIN_B}" \
-        "${CHANNEL_A_TO_B}" "${CHANNEL_B_TO_A}" \
+        "${CHANNEL_A_TO_B}" "${CHANNEL_B_TO_A}" "${CHANNEL_C_TO_AB}" \
         >>"${LOG_B}" 2>&1 &
+
+    tgbsctl run \
+        --name "${DOMAIN_C}" \
+        --runtime-us "${RUNTIME_US}" \
+        --period-us "${PERIOD_US}" \
+        --cpus "${CPUS}" \
+        "${ENTRYPOINT}" publisher "${DOMAIN_C}" "${CHANNEL_C_TO_AB}" \
+        >>"${LOG_C}" 2>&1 &
 
     echo "TGBS communication demo started in the background."
     echo "Follow the exchanges with:"
-    echo "  tail -f ${LOG_A} ${LOG_B}"
+    echo "  tail -f ${LOG_A} ${LOG_B} ${LOG_C}"
 }
 
 stop()
@@ -122,6 +152,9 @@ stop()
     if domain_exists "${DOMAIN_B}"; then
         tgbsctl kill "${DOMAIN_B}"
     fi
+    if domain_exists "${DOMAIN_C}"; then
+        tgbsctl kill "${DOMAIN_C}"
+    fi
 
     if ! wait_for_domains_to_stop; then
         echo "tgbs-demo-comm: timed out waiting for domains to stop" >&2
@@ -130,6 +163,7 @@ stop()
 
     delete_channel "${CHANNEL_A_TO_B}"
     delete_channel "${CHANNEL_B_TO_A}"
+    delete_channel "${CHANNEL_C_TO_AB}"
     echo "TGBS communication demo stopped."
 }
 
@@ -154,8 +188,8 @@ case "${1:-}" in
             exit 1
         }
         mkdir -p "${LOG_DIR}"
-        touch "${LOG_A}" "${LOG_B}"
-        exec tail -f "${LOG_A}" "${LOG_B}"
+        touch "${LOG_A}" "${LOG_B}" "${LOG_C}"
+        exec tail -f "${LOG_A}" "${LOG_B}" "${LOG_C}"
         ;;
     help|-h|--help)
         usage

@@ -1,5 +1,5 @@
-SUMMARY = "Bidirectional TGBS communication demonstration"
-DESCRIPTION = "Two TGBS domains exchange distinct messages over two unidirectional libtgbscomm channels."
+SUMMARY = "TGBS queuing and sampling communication demonstration"
+DESCRIPTION = "Two TGBS domains exchange messages over queuing channels and subscribe to a sampling channel published by a third domain."
 
 LICENSE = "MIT"
 LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda2f7b4f302"
@@ -14,11 +14,11 @@ S = "${WORKDIR}"
 DEPENDS = "libtgbscomm"
 RDEPENDS:${PN} = "packagegroup-tgbs-runtime"
 
-CFLAGS += "-Wall -Wextra"
+CFLAGS += "-Wall -Wextra -pthread"
 
 do_compile() {
     ${CC} ${CFLAGS} -o ${B}/tgbs-demo-comm-node \
-        ${WORKDIR}/tgbs-demo-comm-node.c ${LDFLAGS} -ltgbscomm
+        ${WORKDIR}/tgbs-demo-comm-node.c ${LDFLAGS} -pthread -ltgbscomm
 }
 
 do_install() {
