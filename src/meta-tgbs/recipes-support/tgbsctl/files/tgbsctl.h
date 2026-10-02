@@ -14,6 +14,7 @@
 #include <limits.h>
 #include <stddef.h>
 #include <sys/types.h>
+#include "channel-contract.h"
 
 #ifndef CG_ROOT
 #define CG_ROOT "/sys/fs/cgroup"
@@ -29,7 +30,7 @@
 #endif
 
 #define CHANNEL_TOPOLOGY_LOCK RUN_ROOT "/.channel-topology.lock"
-#define CHANNEL_NAME_SIZE 64
+#define CHANNEL_NAME_SIZE TGBS_CONTRACT_NAME_SIZE
 
 /* Derived domain state. Never stored; recomputed from cgroupfs and /proc. */
 enum domain_state {
@@ -49,6 +50,7 @@ enum channel_mount_role {
 
 struct channel_mount_entry {
 	char name[CHANNEL_NAME_SIZE];
+	enum tgbs_contract_type type;
 	unsigned int roles;
 	int channel_fd;
 	int endpoint_fd;

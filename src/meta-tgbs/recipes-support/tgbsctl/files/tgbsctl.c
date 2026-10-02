@@ -55,7 +55,8 @@ void usage(const char *prog)
 		"  %s set NAME memory-max BYTES|max\n"
 		"  %s set NAME pids-max COUNT|max\n"
 		"  %s channel create --name NAME --source DOMAIN --destination DOMAIN\n"
-		"         --max-message-size BYTES\n"
+		"         --max-message-size BYTES --type queuing|sampling\n"
+		"         [--destination DOMAIN ...] [--refresh-period-us PERIOD]\n"
 		"  %s channel list\n"
 		"  %s channel inspect NAME\n"
 		"  %s channel delete NAME\n"
@@ -80,7 +81,11 @@ void usage(const char *prog)
 		"  pause    Freeze every process in NAME.\n"
 		"  resume   Unfreeze every process in NAME.\n"
 		"  set      Change one value of NAME's temporal contract.\n"
-		"  channel  Manage immutable inter-container channel contracts.\n",
+		"  channel  Manage immutable inter-container channel contracts.\n"
+		"           TYPE is required: queuing or sampling.\n"
+		"           Queuing requires exactly one destination.\n"
+		"           Sampling requires REFRESH_PERIOD in microseconds and allows\n"
+		"           up to 64 distinct destinations. Its data backend is pending.\n",
 		prog, prog, prog, prog, prog, prog, prog, prog, prog, prog,
 		prog, prog, prog, prog, prog, prog, CG_ROOT);
 }

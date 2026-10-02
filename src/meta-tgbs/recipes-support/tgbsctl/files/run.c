@@ -218,14 +218,17 @@ static int setup_channel_mounts(const struct channel_mount_plan *plan)
 			return report_mount_error("unable to make channel read-only at",
 				target);
 
-		if (entry->roles & CHANNEL_MOUNT_DESTINATION) {
-			/* A destination owns the writable endpoint so it can create and
-			 * remove the receiver socket. */
+		if ((entry->type == TGBS_CONTRACT_QUEUING &&
+		     (entry->roles & CHANNEL_MOUNT_DESTINATION)) ||
+		    (entry->type == TGBS_CONTRACT_SAMPLING &&
+		     (entry->roles & CHANNEL_MOUNT_SOURCE))) {
+			/* Queuing destinations create the socket; sampling sources will
+			 * publish the latest value in the writable endpoint directory. */
 			if (move_mount_to_path(entry->endpoint_fd, endpoint) != 0)
-				return report_mount_error("unable to expose destination endpoint at",
+				return report_mount_error("unable to expose writable endpoint at",
 					endpoint);
 			if (remount_bind(endpoint, 0) != 0)
-				return report_mount_error("unable to make destination endpoint writable at",
+				return report_mount_error("unable to make endpoint writable at",
 					endpoint);
 		}
 

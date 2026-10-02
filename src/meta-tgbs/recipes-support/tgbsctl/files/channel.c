@@ -21,21 +21,12 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 
-#define CONTRACT_FORMAT 1
 #define CONTRACT_FILE "/contract"
 #define ENDPOINT_DIR "/endpoint"
 #define CHANNEL_SOCKET "/endpoint/channel.sock"
 #define SOURCE_LOCK "/endpoint/source.lock"
 #define RECEIVER_LOCK "/endpoint/receiver.lock"
 #define LIFETIME_LOCK "/lifetime.lock"
-
-struct channel_contract {
-	char name[CHANNEL_NAME_SIZE];
-	char generation[64];
-	char source[256];
-	char destination[256];
-	unsigned long long max_message_size;
-};
 
 static int make_channel_path(char *out, size_t outsz, const char *name,
 		const char *suffix)
@@ -91,106 +82,9 @@ static int is_valid_channel_name(const char *name)
 	return strlen(name) < CHANNEL_NAME_SIZE;
 }
 
-static int copy_value(char *out, size_t outsz, const char *value)
+static int read_contract(const char *name, struct tgbs_channel_contract *contract)
 {
-	size_t len = strlen(value);
-
-	if (len == 0 || len >= outsz) {
-		errno = EINVAL;
-		return -1;
-	}
-	memcpy(out, value, len + 1);
-	return 0;
-}
-
-static int read_contract(const char *name, struct channel_contract *contract)
-{
-	char path[PATH_MAX];
-	char *line = NULL;
-	size_t capacity = 0;
-	ssize_t length;
-	FILE *file;
-	unsigned int seen = 0;
-	unsigned long long format = 0;
-
-	if (!is_valid_channel_name(name)) {
-		errno = EINVAL;
-		return -1;
-	}
-	if (make_channel_path(path, sizeof(path), name, CONTRACT_FILE) != 0)
-		return -1;
-	file = fopen(path, "r");
-	if (file == NULL)
-		return -1;
-
-	memset(contract, 0, sizeof(*contract));
-	while ((length = getline(&line, &capacity, file)) >= 0) {
-		char *equals;
-		char *key;
-		char *value;
-
-		while (length > 0 &&
-		       (line[length - 1] == '\n' || line[length - 1] == '\r'))
-			line[--length] = '\0';
-		equals = strchr(line, '=');
-		if (equals == NULL || equals == line || equals[1] == '\0')
-			goto invalid;
-		*equals = '\0';
-		key = line;
-		value = equals + 1;
-
-		if (strcmp(key, "format") == 0 && !(seen & 1U)) {
-			if (parse_positive(value, &format) != 0)
-				goto invalid;
-			seen |= 1U;
-		} else if (strcmp(key, "name") == 0 && !(seen & 2U)) {
-			if (copy_value(contract->name, sizeof(contract->name), value) != 0)
-				goto invalid;
-			seen |= 2U;
-		} else if (strcmp(key, "generation") == 0 && !(seen & 4U)) {
-			if (copy_value(contract->generation,
-					sizeof(contract->generation), value) != 0)
-				goto invalid;
-			seen |= 4U;
-		} else if (strcmp(key, "source") == 0 && !(seen & 8U)) {
-			if (copy_value(contract->source,
-					sizeof(contract->source), value) != 0)
-				goto invalid;
-			seen |= 8U;
-		} else if (strcmp(key, "destination") == 0 && !(seen & 16U)) {
-			if (copy_value(contract->destination,
-					sizeof(contract->destination), value) != 0)
-				goto invalid;
-			seen |= 16U;
-		} else if (strcmp(key, "max_message_size") == 0 && !(seen & 32U)) {
-			if (parse_positive(value, &contract->max_message_size) != 0)
-				goto invalid;
-			seen |= 32U;
-		} else {
-			goto invalid;
-		}
-	}
-	if (ferror(file))
-		goto invalid;
-	free(line);
-	fclose(file);
-
-	if (seen != 63U || format != CONTRACT_FORMAT ||
-	    strcmp(contract->name, name) != 0 ||
-	    !is_valid_channel_name(contract->name) ||
-	    !is_valid_name(contract->source) ||
-	    !is_valid_name(contract->destination) ||
-	    contract->max_message_size > (unsigned long long)(INT_MAX - 32)) {
-		errno = EINVAL;
-		return -1;
-	}
-	return 0;
-
-invalid:
-	free(line);
-	fclose(file);
-	errno = EINVAL;
-	return -1;
+	return tgbs_contract_read(CHANNEL_ROOT, name, contract);
 }
 
 static int read_generation(char *out, size_t outsz)
@@ -205,7 +99,7 @@ static int read_generation(char *out, size_t outsz)
 }
 
 static int write_contract(const char *name,
-		const struct channel_contract *contract)
+		const struct tgbs_channel_contract *contract)
 {
 	char path[PATH_MAX];
 	FILE *file;
@@ -228,14 +122,20 @@ static int write_contract(const char *name,
 
 	if (fprintf(file,
 		    "format=%d\n"
+		    "type=%s\n"
 		    "name=%s\n"
 		    "generation=%s\n"
 		    "source=%s\n"
-		    "destination=%s\n"
 		    "max_message_size=%llu\n",
-		    CONTRACT_FORMAT, contract->name, contract->generation,
-		    contract->source, contract->destination,
+		    TGBS_CONTRACT_FORMAT, tgbs_contract_type_name(contract->type),
+		    contract->name, contract->generation, contract->source,
 		    contract->max_message_size) < 0)
+		failed = 1;
+	for (size_t i = 0; !failed && i < contract->destination_count; i++)
+		if (fprintf(file, "destination=%s\n", contract->destinations[i]) < 0)
+			failed = 1;
+	if (!failed && contract->type == TGBS_CONTRACT_SAMPLING &&
+	    fprintf(file, "refresh_period_us=%llu\n", contract->refresh_period_us) < 0)
 		failed = 1;
 	if (!failed && fflush(file) != 0)
 		failed = 1;
@@ -292,7 +192,7 @@ static int domain_populated(const char *name)
 	return -1;
 }
 
-static int contract_has_active_domain(const struct channel_contract *contract,
+static int contract_has_active_domain(const struct tgbs_channel_contract *contract,
 		const char **active_name)
 {
 	int active = domain_populated(contract->source);
@@ -303,12 +203,14 @@ static int contract_has_active_domain(const struct channel_contract *contract,
 		*active_name = contract->source;
 		return 1;
 	}
-	active = domain_populated(contract->destination);
-	if (active < 0)
-		return -1;
-	if (active) {
-		*active_name = contract->destination;
-		return 1;
+	for (size_t i = 0; i < contract->destination_count; i++) {
+		active = domain_populated(contract->destinations[i]);
+		if (active < 0)
+			return -1;
+		if (active) {
+			*active_name = contract->destinations[i];
+			return 1;
+		}
 	}
 	return 0;
 }
@@ -404,9 +306,7 @@ static int create_channel(int argc, char **argv)
 {
 	const char *name = NULL;
 	const char *source = NULL;
-	const char *destination = NULL;
-	unsigned long long max_message_size = 0;
-	struct channel_contract contract;
+	struct tgbs_channel_contract contract = {0};
 	const char *active_name = NULL;
 	char path[PATH_MAX];
 	int topology_fd;
@@ -417,11 +317,13 @@ static int create_channel(int argc, char **argv)
 		{"source", required_argument, NULL, 's'},
 		{"destination", required_argument, NULL, 'd'},
 		{"max-message-size", required_argument, NULL, 'm'},
+		{"type", required_argument, NULL, 't'},
+		{"refresh-period-us", required_argument, NULL, 'r'},
 		{0, 0, 0, 0},
 	};
 
 	optind = 3;
-	while ((opt = getopt_long(argc, argv, "+n:s:d:m:", options, NULL)) != -1) {
+	while ((opt = getopt_long(argc, argv, "+n:s:d:m:t:r:", options, NULL)) != -1) {
 		switch (opt) {
 		case 'n':
 			name = optarg;
@@ -430,12 +332,26 @@ static int create_channel(int argc, char **argv)
 			source = optarg;
 			break;
 		case 'd':
-			destination = optarg;
+			if (tgbs_contract_add_destination(&contract, optarg) != 0) {
+				fprintf(stderr, "tgbsctl: ERROR - invalid, duplicate, or too many destinations\n");
+				return 2;
+			}
 			break;
 		case 'm':
-			if (parse_positive(optarg, &max_message_size) != 0) {
-				fprintf(stderr,
-					"tgbsctl: ERROR - --max-message-size must be positive\n");
+			if (tgbs_contract_parse_positive(optarg, &contract.max_message_size) != 0) {
+				fprintf(stderr, "tgbsctl: ERROR - --max-message-size must be positive\n");
+				return 2;
+			}
+			break;
+		case 't':
+			if (tgbs_contract_parse_type(optarg, &contract.type) != 0) {
+				fprintf(stderr, "tgbsctl: ERROR - --type must be queuing or sampling\n");
+				return 2;
+			}
+			break;
+		case 'r':
+			if (tgbs_contract_parse_positive(optarg, &contract.refresh_period_us) != 0) {
+				fprintf(stderr, "tgbsctl: ERROR - --refresh-period-us must be positive\n");
 				return 2;
 			}
 			break;
@@ -443,24 +359,28 @@ static int create_channel(int argc, char **argv)
 			return 2;
 		}
 	}
-	if (optind != argc || name == NULL || source == NULL ||
-	    destination == NULL || !is_valid_channel_name(name) ||
-	    !is_valid_name(source) || !is_valid_name(destination) ||
-	    max_message_size == 0) {
-		fprintf(stderr,
-			"tgbsctl: ERROR - channel create requires valid --name, --source, "
-			"--destination, and --max-message-size\n");
+	if (contract.type == 0) {
+		fprintf(stderr, "tgbsctl: ERROR - --type is required (queuing or sampling)\n");
 		return 2;
 	}
-	if (strcmp(source, "channels") == 0 ||
-	    strcmp(destination, "channels") == 0) {
-		fprintf(stderr,
-			"tgbsctl: ERROR - the domain name 'channels' is reserved\n");
+	if (optind != argc || !is_valid_channel_name(name) ||
+	    !tgbs_contract_valid_name(source, sizeof(contract.source))) {
+		fprintf(stderr, "tgbsctl: ERROR - channel create requires valid --name and --source\n");
 		return 2;
 	}
-	if (max_message_size > (unsigned long long)(INT_MAX - 32)) {
+	strcpy(contract.name, name);
+	strcpy(contract.source, source);
+	if (read_generation(contract.generation, sizeof(contract.generation)) != 0) {
+		fprintf(stderr, "tgbsctl: ERROR - unable to generate channel identity: %s\n",
+			strerror(errno));
+		return 1;
+	}
+	if (tgbs_contract_validate(&contract) != 0) {
 		fprintf(stderr,
-			"tgbsctl: ERROR - --max-message-size exceeds the supported limit\n");
+			"tgbsctl: ERROR - invalid channel contract: require a positive supported "
+			"--max-message-size and valid participants; queuing requires exactly "
+			"one destination and no refresh period; sampling requires one or more "
+			"destinations and a positive --refresh-period-us convertible to nanoseconds\n");
 		return 2;
 	}
 
@@ -470,19 +390,6 @@ static int create_channel(int argc, char **argv)
 			strerror(errno));
 		return 1;
 	}
-
-	memset(&contract, 0, sizeof(contract));
-	snprintf(contract.name, sizeof(contract.name), "%s", name);
-	snprintf(contract.source, sizeof(contract.source), "%s", source);
-	snprintf(contract.destination, sizeof(contract.destination), "%s", destination);
-	contract.max_message_size = max_message_size;
-	if (read_generation(contract.generation, sizeof(contract.generation)) != 0) {
-		fprintf(stderr, "tgbsctl: ERROR - unable to generate channel identity: %s\n",
-			strerror(errno));
-		channel_topology_unlock(topology_fd);
-		return 1;
-	}
-
 	int active = contract_has_active_domain(&contract, &active_name);
 	if (active < 0) {
 		fprintf(stderr, "tgbsctl: ERROR - unable to inspect participant cgroups: %s\n",
@@ -509,7 +416,9 @@ static int create_channel(int argc, char **argv)
 	    mkdir(path, 0755) != 0)
 		goto create_failed;
 	if (create_lock_file(name, LIFETIME_LOCK) != 0 ||
-	    create_lock_file(name, SOURCE_LOCK) != 0 ||
+	    create_lock_file(name, SOURCE_LOCK) != 0)
+		goto create_failed;
+	if (contract.type == TGBS_CONTRACT_QUEUING &&
 	    create_lock_file(name, RECEIVER_LOCK) != 0)
 		goto create_failed;
 	if (write_contract(name, &contract) != 0)
@@ -518,8 +427,10 @@ static int create_channel(int argc, char **argv)
 	    chmod(path, 0555) != 0)
 		goto create_failed;
 
-	printf("tgbsctl: created channel %s (%s -> %s, max message %llu bytes)\n",
-		name, source, destination, max_message_size);
+	printf("tgbsctl: created %s channel %s (source %s, %zu destination(s), "
+	       "max message %llu bytes)\n",
+		tgbs_contract_type_name(contract.type), name, source,
+		contract.destination_count, contract.max_message_size);
 	channel_topology_unlock(topology_fd);
 	return 0;
 
@@ -534,6 +445,12 @@ create_failed:
 			name, strerror(errno));
 		return 1;
 	}
+}
+
+static void print_destinations(const struct tgbs_channel_contract *contract)
+{
+	for (size_t i = 0; i < contract->destination_count; i++)
+		printf("%s%s", i == 0 ? "" : ",", contract->destinations[i]);
 }
 
 static int list_channels(void)
@@ -555,25 +472,31 @@ static int list_channels(void)
 		return 1;
 	}
 
-	printf("%-20s %-20s %-20s %-12s %-8s %-8s\n",
-		"NAME", "SOURCE", "DESTINATION", "MAX_BYTES", "OPEN", "SOCKET");
+	printf("%-20s %-8s %-20s %-12s %-12s %-8s %-8s %s\n",
+		"NAME", "TYPE", "SOURCE", "MAX_BYTES", "REFRESH_US",
+		"OPEN", "SOCKET", "DESTINATIONS");
 	while ((entry = readdir(dir)) != NULL) {
-		struct channel_contract contract;
+		struct tgbs_channel_contract contract;
+		char refresh[32] = "-";
 		int open_handles;
 
 		if (entry->d_name[0] == '.')
 			continue;
 		if (read_contract(entry->d_name, &contract) != 0) {
-			printf("%-20s %-20s %-20s %-12s %-8s %-8s\n",
-				entry->d_name, "(invalid)", "-", "-", "-", "-");
+			printf("%-20s (invalid)\n", entry->d_name);
 			continue;
 		}
+		if (contract.type == TGBS_CONTRACT_SAMPLING)
+			snprintf(refresh, sizeof(refresh), "%llu", contract.refresh_period_us);
 		open_handles = channel_has_open_handles(entry->d_name);
-		printf("%-20s %-20s %-20s %-12llu %-8s %-8s\n",
-			contract.name, contract.source, contract.destination,
-			contract.max_message_size,
+		printf("%-20s %-8s %-20s %-12llu %-12s %-8s %-8s ",
+			contract.name, tgbs_contract_type_name(contract.type),
+			contract.source, contract.max_message_size, refresh,
 			open_handles > 0 ? "yes" : open_handles == 0 ? "no" : "?",
-			channel_socket_exists(entry->d_name) ? "present" : "absent");
+			contract.type == TGBS_CONTRACT_QUEUING ?
+				(channel_socket_exists(entry->d_name) ? "present" : "absent") : "-");
+		print_destinations(&contract);
+		putchar('\n');
 	}
 	closedir(dir);
 	channel_topology_unlock(topology_fd);
@@ -582,7 +505,7 @@ static int list_channels(void)
 
 static int inspect_channel(const char *name)
 {
-	struct channel_contract contract;
+	struct tgbs_channel_contract contract;
 	const char *active_name = NULL;
 	int topology_fd;
 	int open_handles;
@@ -606,14 +529,22 @@ static int inspect_channel(const char *name)
 	active = contract_has_active_domain(&contract, &active_name);
 
 	printf("Name:             %s\n", contract.name);
+	printf("Type:             %s\n", tgbs_contract_type_name(contract.type));
 	printf("Generation:       %s\n", contract.generation);
 	printf("Source:           %s\n", contract.source);
-	printf("Destination:      %s\n", contract.destination);
+	printf("Destination(s):   ");
+	print_destinations(&contract);
+	putchar('\n');
+	if (contract.type == TGBS_CONTRACT_SAMPLING)
+		printf("Refresh period:   %llu us\n", contract.refresh_period_us);
 	printf("Max message size: %llu bytes\n", contract.max_message_size);
 	printf("Open handles:     %s\n",
 		open_handles > 0 ? "yes" : open_handles == 0 ? "no" : "unknown");
-	printf("Channel socket:   %s\n",
-		channel_socket_exists(name) ? "present" : "absent");
+	if (contract.type == TGBS_CONTRACT_QUEUING)
+		printf("Channel socket:   %s\n",
+			channel_socket_exists(name) ? "present" : "absent");
+	else
+		printf("Sampling backend: not implemented\n");
 	if (active > 0)
 		printf("Active domain:    %s\n", active_name);
 	else if (active == 0)
@@ -627,7 +558,7 @@ static int inspect_channel(const char *name)
 
 static int delete_channel(const char *name)
 {
-	struct channel_contract contract;
+	struct tgbs_channel_contract contract;
 	const char *active_name = NULL;
 	char path[PATH_MAX];
 	struct stat st;
@@ -675,17 +606,19 @@ static int delete_channel(const char *name)
 	    chmod(path, 0755) != 0)
 		goto delete_error;
 
-	if (make_channel_path(path, sizeof(path), name, CHANNEL_SOCKET) != 0)
-		goto delete_error;
-	if (lstat(path, &st) == 0) {
-		if (!S_ISSOCK(st.st_mode)) {
-			errno = EINVAL;
+	if (contract.type == TGBS_CONTRACT_QUEUING) {
+		if (make_channel_path(path, sizeof(path), name, CHANNEL_SOCKET) != 0)
+			goto delete_error;
+		if (lstat(path, &st) == 0) {
+			if (!S_ISSOCK(st.st_mode)) {
+				errno = EINVAL;
+				goto delete_error;
+			}
+			if (unlink(path) != 0)
+				goto delete_error;
+		} else if (errno != ENOENT) {
 			goto delete_error;
 		}
-		if (unlink(path) != 0)
-			goto delete_error;
-	} else if (errno != ENOENT) {
-		goto delete_error;
 	}
 	if (make_channel_path(path, sizeof(path), name, SOURCE_LOCK) != 0 ||
 	    remove_if_exists(path) != 0)
@@ -773,7 +706,7 @@ int channel_mount_plan_prepare(const char *domain,
 		return -1;
 	}
 	while ((entry = readdir(dir)) != NULL) {
-		struct channel_contract contract;
+		struct tgbs_channel_contract contract;
 		struct channel_mount_entry mount_entry = {
 			.channel_fd = -1,
 			.endpoint_fd = -1,
@@ -789,13 +722,14 @@ int channel_mount_plan_prepare(const char *domain,
 		}
 		if (strcmp(contract.source, domain) == 0)
 			mount_entry.roles |= CHANNEL_MOUNT_SOURCE;
-		if (strcmp(contract.destination, domain) == 0)
+		if (tgbs_contract_has_destination(&contract, domain))
 			mount_entry.roles |= CHANNEL_MOUNT_DESTINATION;
 		if (mount_entry.roles == 0)
 			continue;
 
 		snprintf(mount_entry.name, sizeof(mount_entry.name), "%s",
 			contract.name);
+		mount_entry.type = contract.type;
 		mount_entry.channel_fd = open_channel_mount_path(contract.name, "");
 		if (mount_entry.channel_fd < 0)
 			goto entry_error;
@@ -803,7 +737,10 @@ int channel_mount_plan_prepare(const char *domain,
 			SOURCE_LOCK);
 		if (mount_entry.source_lock_fd < 0)
 			goto entry_error;
-		if (mount_entry.roles & CHANNEL_MOUNT_DESTINATION) {
+		if ((contract.type == TGBS_CONTRACT_QUEUING &&
+		     (mount_entry.roles & CHANNEL_MOUNT_DESTINATION)) ||
+		    (contract.type == TGBS_CONTRACT_SAMPLING &&
+		     (mount_entry.roles & CHANNEL_MOUNT_SOURCE))) {
 			mount_entry.endpoint_fd = open_channel_mount_path(contract.name,
 				ENDPOINT_DIR);
 			if (mount_entry.endpoint_fd < 0)

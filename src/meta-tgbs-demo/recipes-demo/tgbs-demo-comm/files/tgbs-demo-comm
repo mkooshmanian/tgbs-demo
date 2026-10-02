@@ -75,12 +75,14 @@ start()
     : > "${LOG_B}"
 
     tgbsctl channel create \
+        --type queuing \
         --name "${CHANNEL_A_TO_B}" \
         --source "${DOMAIN_A}" \
         --destination "${DOMAIN_B}" \
         --max-message-size "${MAX_MESSAGE_SIZE}"
 
     if ! tgbsctl channel create \
+        --type queuing \
         --name "${CHANNEL_B_TO_A}" \
         --source "${DOMAIN_B}" \
         --destination "${DOMAIN_A}" \

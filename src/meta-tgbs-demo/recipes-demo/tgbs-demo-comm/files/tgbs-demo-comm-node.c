@@ -4,7 +4,7 @@
  * Bidirectional libtgbscomm ping-pong demonstration node.
  */
 
-#include <tgbs/channel.h>
+#include <tgbs/queuing.h>
 
 #include <errno.h>
 #include <stdio.h>
@@ -15,7 +15,7 @@
 
 #define MESSAGE_SIZE 128
 
-static int send_message(tgbs_channel_t *channel, const char *node,
+static int send_message(tgbs_queuing_channel_t *channel, const char *node,
 		const char *channel_name, const char *message)
 {
 	struct timespec retry = {
@@ -25,7 +25,7 @@ static int send_message(tgbs_channel_t *channel, const char *node,
 	int waiting = 0;
 
 	for (;;) {
-		if (tgbs_channel_send(channel, message, strlen(message)) == 0) {
+		if (tgbs_queuing_channel_send(channel, message, strlen(message)) == 0) {
 			printf("%s: sent on %s: %s\n", node, channel_name, message);
 			return 0;
 		}
@@ -40,12 +40,12 @@ static int send_message(tgbs_channel_t *channel, const char *node,
 	}
 }
 
-static int receive_message(tgbs_channel_t *channel, const char *node,
+static int receive_message(tgbs_queuing_channel_t *channel, const char *node,
 		const char *channel_name, char *message, size_t capacity)
 {
 	size_t length;
 
-	if (tgbs_channel_receive(channel, message, capacity - 1, &length) != 0)
+	if (tgbs_queuing_channel_receive(channel, message, capacity - 1, &length) != 0)
 		return -1;
 	message[length] = '\0';
 	printf("%s: received on %s: %s\n", node, channel_name, message);
@@ -58,8 +58,8 @@ int main(int argc, char **argv)
 	const char *node;
 	const char *receive_channel;
 	const char *send_channel;
-	tgbs_channel_t *receiver = NULL;
-	tgbs_channel_t *sender = NULL;
+	tgbs_queuing_channel_t *receiver = NULL;
+	tgbs_queuing_channel_t *sender = NULL;
 	char message[MESSAGE_SIZE + 1];
 	unsigned int sequence = 1;
 	int initiator;
@@ -83,16 +83,16 @@ int main(int argc, char **argv)
 	}
 
 	setvbuf(stdout, NULL, _IOLBF, 0);
-	if (tgbs_channel_open(receive_channel, TGBS_CHANNEL_DESTINATION,
+	if (tgbs_queuing_channel_open(receive_channel, TGBS_CHANNEL_DESTINATION,
 			&receiver) != 0) {
 		fprintf(stderr, "%s: cannot open receiver %s: %s\n",
 			node, receive_channel, strerror(errno));
 		return 1;
 	}
-	if (tgbs_channel_open(send_channel, TGBS_CHANNEL_SOURCE, &sender) != 0) {
+	if (tgbs_queuing_channel_open(send_channel, TGBS_CHANNEL_SOURCE, &sender) != 0) {
 		fprintf(stderr, "%s: cannot open sender %s: %s\n",
 			node, send_channel, strerror(errno));
-		tgbs_channel_close(receiver);
+		tgbs_queuing_channel_close(receiver);
 		return 1;
 	}
 
@@ -121,7 +121,7 @@ int main(int argc, char **argv)
 	}
 
 	fprintf(stderr, "%s: communication failed: %s\n", node, strerror(errno));
-	tgbs_channel_close(sender);
-	tgbs_channel_close(receiver);
+	tgbs_queuing_channel_close(sender);
+	tgbs_queuing_channel_close(receiver);
 	return 1;
 }
