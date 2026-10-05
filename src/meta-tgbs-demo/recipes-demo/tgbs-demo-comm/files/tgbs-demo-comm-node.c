@@ -93,11 +93,12 @@ static int send_message(tgbs_queuing_channel_t *channel, const char *node,
 	int waiting = 0;
 
 	for (;;) {
-		if (tgbs_queuing_channel_send(channel, message, strlen(message)) == 0) {
+		if (tgbs_queuing_channel_send(channel, message, strlen(message),
+				TGBS_TIMEOUT_INFINITE) == 0) {
 			printf("%s: sent on %s: %s\n", node, channel_name, message);
 			return 0;
 		}
-		if (errno != ENOENT && errno != ECONNREFUSED)
+		if (errno != ENOTCONN)
 			return -1;
 		if (!waiting) {
 			printf("%s: waiting for the receiver on %s\n",
@@ -113,7 +114,8 @@ static int receive_message(tgbs_queuing_channel_t *channel, const char *node,
 {
 	size_t length;
 
-	if (tgbs_queuing_channel_receive(channel, message, capacity - 1, &length) != 0)
+	if (tgbs_queuing_channel_receive(channel, message, capacity - 1, &length,
+			TGBS_TIMEOUT_INFINITE) != 0)
 		return -1;
 	message[length] = '\0';
 	printf("%s: received on %s: %s\n", node, channel_name, message);

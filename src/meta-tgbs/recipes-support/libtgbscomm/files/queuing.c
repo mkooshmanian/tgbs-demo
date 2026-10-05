@@ -19,6 +19,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
+#include <time.h>
 #include <unistd.h>
 
 #define SOURCE_LOCK "/endpoint/source.lock"
@@ -35,6 +36,108 @@ struct tgbs_queuing_channel {
 	dev_t socket_device;
 	ino_t socket_inode;
 };
+
+struct queuing_timeout {
+	int64_t duration_us;
+	uint64_t deadline_us;
+};
+
+static int monotonic_us(uint64_t *now)
+{
+	struct timespec ts;
+
+	if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0)
+		return -1;
+	*now = (uint64_t)ts.tv_sec * UINT64_C(1000000) + ts.tv_nsec / 1000;
+	return 0;
+}
+
+static int timeout_init(struct queuing_timeout *timeout, int64_t duration_us)
+{
+	uint64_t now;
+
+	/* Bound the seconds field of ppoll's timespec on the 32-bit target. */
+	if (duration_us < TGBS_TIMEOUT_INFINITE ||
+	    duration_us / INT64_C(1000000) > LONG_MAX) {
+		errno = EINVAL;
+		return -1;
+	}
+	timeout->duration_us = duration_us;
+	timeout->deadline_us = 0;
+	if (duration_us > 0) {
+		if (monotonic_us(&now) != 0)
+			return -1;
+		timeout->deadline_us = now + (uint64_t)duration_us;
+	}
+	return 0;
+}
+
+static int timeout_remaining(const struct queuing_timeout *timeout,
+		struct timespec *remaining)
+{
+	uint64_t now, duration;
+
+	if (timeout->duration_us <= 0)
+		return 0;
+	if (monotonic_us(&now) != 0)
+		return -1;
+	if (now >= timeout->deadline_us) {
+		errno = ETIMEDOUT;
+		return -1;
+	}
+	duration = timeout->deadline_us - now;
+	remaining->tv_sec = (time_t)(duration / UINT64_C(1000000));
+	remaining->tv_nsec = (long)(duration % UINT64_C(1000000)) * 1000;
+	return 0;
+}
+
+static int wait_ready(int fd, short events, const struct queuing_timeout *timeout)
+{
+	struct pollfd poll_fd = { .fd = fd, .events = events };
+	struct timespec remaining;
+	int ready;
+
+	if (timeout->duration_us == 0) {
+		errno = EAGAIN;
+		return -1;
+	}
+	for (;;) {
+		if (timeout_remaining(timeout, &remaining) != 0)
+			return -1;
+		poll_fd.revents = 0;
+		ready = ppoll(&poll_fd, 1,
+			timeout->duration_us > 0 ? &remaining : NULL, NULL);
+		if (ready < 0) {
+			if (errno == EINTR)
+				continue;
+			return -1;
+		}
+		if (ready == 0) {
+			errno = ETIMEDOUT;
+			return -1;
+		}
+		if (poll_fd.revents & POLLNVAL) {
+			errno = EBADF;
+			return -1;
+		}
+		if (poll_fd.revents & POLLERR) {
+			int socket_error;
+			socklen_t size = sizeof(socket_error);
+
+			if (getsockopt(fd, SOL_SOCKET, SO_ERROR,
+					&socket_error, &size) != 0)
+				return -1;
+			errno = socket_error != 0 ? socket_error : EIO;
+			return -1;
+		}
+		if (poll_fd.revents & POLLHUP) {
+			errno = EPIPE;
+			return -1;
+		}
+		if (poll_fd.revents & events)
+			return 0;
+	}
+}
 
 static int configure_sender_buffer(int fd, size_t max_message_size)
 {
@@ -193,11 +296,13 @@ error:
 }
 
 int tgbs_queuing_channel_send(tgbs_queuing_channel_t *channel, const void *message,
-		size_t length)
+		size_t length, int64_t timeout_us)
 {
-	ssize_t sent;
+	struct queuing_timeout timeout;
+	struct timespec remaining;
 	struct sockaddr_un address;
 	socklen_t address_length;
+	ssize_t sent;
 
 	if (channel == NULL || channel->direction != TGBS_CHANNEL_SOURCE ||
 	    message == NULL || length == 0) {
@@ -208,44 +313,95 @@ int tgbs_queuing_channel_send(tgbs_queuing_channel_t *channel, const void *messa
 		errno = EMSGSIZE;
 		return -1;
 	}
-	address_length = unix_address(&address, channel->socket_path);
-	do {
-		sent = sendto(channel->fd, message, length, MSG_NOSIGNAL,
-			(struct sockaddr *)&address, address_length);
-	} while (sent < 0 && errno == EINTR);
-	if (sent < 0)
+	if (timeout_init(&timeout, timeout_us) != 0)
 		return -1;
+	address_length = unix_address(&address, channel->socket_path);
+	for (;;) {
+		/* Associate at each attempt, so source open is independent and the
+		 * next send can find a recreated destination. All concurrent callers
+		 * use the same immutable path; there is no userspace connected flag
+		 * to race or become stale after fork. The peer association lets
+		 * POLLOUT account for the destination queue as well as our buffer. */
+		while (connect(channel->fd, (struct sockaddr *)&address,
+				address_length) != 0) {
+			if (errno != EINTR)
+				goto error;
+			if (timeout_remaining(&timeout, &remaining) != 0)
+				return -1;
+		}
+		sent = send(channel->fd, message, length, MSG_NOSIGNAL | MSG_DONTWAIT);
+		if (sent >= 0)
+			break;
+		if (errno == EINTR) {
+			if (timeout_remaining(&timeout, &remaining) != 0)
+				return -1;
+			continue;
+		}
+		if (errno != EAGAIN && errno != EWOULDBLOCK)
+			goto error;
+		if (wait_ready(channel->fd, POLLOUT, &timeout) != 0)
+			goto error;
+	}
 	if ((size_t)sent != length) {
 		errno = EIO;
 		return -1;
 	}
 	return 0;
+
+error:
+	/* Normalize unavailable-peer errors; preserve all other failures. */
+	switch (errno) {
+	case ENOENT:
+	case ECONNREFUSED:
+	case ECONNRESET:
+	case EPIPE:
+		errno = ENOTCONN;
+		break;
+	default:
+		break;
+	}
+	return -1;
 }
 
 int tgbs_queuing_channel_receive(tgbs_queuing_channel_t *channel, void *message,
-		size_t capacity, size_t *length)
+		size_t capacity, size_t *length, int64_t timeout_us)
 {
+	struct queuing_timeout timeout;
+	struct timespec remaining;
 	struct iovec iov;
 	struct msghdr msg;
 	ssize_t received;
 
+	if (length != NULL)
+		*length = 0;
 	if (channel == NULL ||
 	    channel->direction != TGBS_CHANNEL_DESTINATION ||
 	    length == NULL || (message == NULL && capacity != 0)) {
 		errno = EINVAL;
 		return -1;
 	}
+	if (timeout_init(&timeout, timeout_us) != 0)
+		return -1;
 	memset(&msg, 0, sizeof(msg));
 	iov.iov_base = message;
 	iov.iov_len = capacity;
 	msg.msg_iov = &iov;
 	msg.msg_iovlen = 1;
 
-	do {
-		received = recvmsg(channel->fd, &msg, MSG_TRUNC);
-	} while (received < 0 && errno == EINTR);
-	if (received < 0)
-		return -1;
+	for (;;) {
+		received = recvmsg(channel->fd, &msg, MSG_TRUNC | MSG_DONTWAIT);
+		if (received >= 0)
+			break;
+		if (errno == EINTR) {
+			if (timeout_remaining(&timeout, &remaining) != 0)
+				return -1;
+			continue;
+		}
+		if (errno != EAGAIN && errno != EWOULDBLOCK)
+			return -1;
+		if (wait_ready(channel->fd, POLLIN, &timeout) != 0)
+			return -1;
+	}
 	*length = (size_t)received;
 	if ((size_t)received > capacity) {
 		errno = EMSGSIZE;
@@ -294,8 +450,12 @@ int tgbs_queuing_channel_get_status(tgbs_queuing_channel_t *channel,
 
 	next_size = recv(channel->fd, NULL, 0,
 		MSG_PEEK | MSG_TRUNC | MSG_DONTWAIT);
-	if (next_size < 0)
+	if (next_size < 0) {
+		/* Another receiver may have consumed the message since poll(). */
+		if (errno == EAGAIN || errno == EWOULDBLOCK)
+			return 0;
 		return -1;
+	}
 	status->message_pending = 1;
 	status->next_message_size = (size_t)next_size;
 	return 0;

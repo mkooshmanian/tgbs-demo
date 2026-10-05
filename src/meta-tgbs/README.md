@@ -136,7 +136,8 @@ size_t length;
 if (tgbs_queuing_channel_open("command", TGBS_CHANNEL_DESTINATION, &rx) == -1)
         /* handle errno */;
 
-if (tgbs_queuing_channel_receive(rx, message, sizeof(message), &length) == -1)
+if (tgbs_queuing_channel_receive(rx, message, sizeof(message), &length,
+                               100000) == -1) /* wait up to 100 ms */
         /* handle errno */;
 
 tgbs_queuing_channel_close(rx);
@@ -146,8 +147,14 @@ The source takes the exclusive `source.lock` and uses an unnamed AF_UNIX
 `SOCK_DGRAM` socket. The destination takes the exclusive `receiver.lock`
 and binds `channel.sock`; a second open for the same direction fails with
 `EADDRINUSE`. A stale socket left by a crashed destination is removed only
-after acquiring `receiver.lock`. The source may open before the destination,
-but sends fail until `channel.sock` exists.
+after acquiring `receiver.lock`. Open only prepares the local endpoint; the
+source may open before the destination, provided the channel contract exists.
+Each send attempt associates the source socket with `channel.sock`, so
+`POLLOUT` can account for the destination queue as well as the sender buffer.
+This does not turn the datagram channel into a stream. Association is refreshed
+at every attempt, without a shared userspace connection flag; retrying send
+after destination recreation does not require reopening the source. A pending
+send may select the new destination when it retries.
 
 Each successful send is one complete, nonempty message. The library caches and
 enforces `max_message_size` when the handle is opened. A receive buffer that
@@ -155,8 +162,34 @@ is too small consumes the datagram and returns `EMSGSIZE` together with its
 original size. The underlying file descriptor is available through
 `tgbs_queuing_channel_fd()` for use with `poll()`/`epoll()`.
 
+Send and receive take an `int64_t timeout_us` argument. Zero means no waiting
+(`EAGAIN` if the queue is full or empty); a positive value means passive waiting
+for that many microseconds (`ETIMEDOUT` on expiration); `TGBS_TIMEOUT_INFINITE`
+means passive waiting without a time limit. Other negative values and durations
+not representable by the platform wait timeout return `EINVAL`.
+An absent, closed or disconnected destination returns `ENOTCONN` from send
+immediately, including with an infinite timeout. No message is retained for
+later delivery. Native unavailable-peer errors are normalized to `ENOTCONN`;
+permission and resource errors are preserved. The demo opens both local
+endpoints directly and retries send on `ENOTCONN` until the receiver is ready.
+It explicitly uses infinite waits for queue space/data availability.
+
+The backend first attempts I/O with `MSG_DONTWAIT`; on `EAGAIN`, it waits
+passively in `ppoll()` for `POLLIN`/`POLLOUT`, unless the timeout is zero.
+Signal interruptions and readiness races with other callers are retried using
+the remaining duration from a single per-call `CLOCK_MONOTONIC` deadline.
+Timer granularity and scheduling (including TGBS windows) can delay the actual
+return beyond the requested duration. Concurrent calls on a shared handle,
+including across `fork()`, have independent deadlines; they compete for
+messages/space with no fairness guarantee. Socket timeout options and
+`O_NONBLOCK` are not modified by I/O. Callers must not close the handle or
+reconnect or shut down its socket while an operation is in progress.
+Sampling API and behavior are unchanged.
+
 AF_UNIX does not provide a per-socket limit or an exact status counter in
 messages. Queuing contracts do not include `max_nb_message`.
+This does not mean unlimited capacity: Linux still applies its internal socket
+buffer and AF_UNIX datagram queue limits, so send can also need a timeout.
 `tgbs_queuing_channel_get_status()` reports whether a message is pending and
 the size of the next message.
 

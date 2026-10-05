@@ -16,15 +16,15 @@ DEBIAN_NOAUTONAME:${PN} = "1"
 do_compile() {
 	${CC} ${CFLAGS} -fPIC -shared ${LDFLAGS} \
 		-Wl,-soname,libtgbscomm.so.0 \
-		-o libtgbscomm.so.0.2.0 queuing.c sampling.c comm-internal.c channel-contract.c
-	ln -sf libtgbscomm.so.0.2.0 libtgbscomm.so.0
+		-o libtgbscomm.so.0.3.0 queuing.c sampling.c comm-internal.c channel-contract.c
+	ln -sf libtgbscomm.so.0.3.0 libtgbscomm.so.0
 	ln -sf libtgbscomm.so.0 libtgbscomm.so
 }
 
 do_install() {
 	install -d ${D}${libdir} ${D}${includedir}/tgbs ${D}${libdir}/pkgconfig
-	install -m 0755 libtgbscomm.so.0.2.0 ${D}${libdir}
-	ln -sf libtgbscomm.so.0.2.0 ${D}${libdir}/libtgbscomm.so.0
+	install -m 0755 libtgbscomm.so.0.3.0 ${D}${libdir}
+	ln -sf libtgbscomm.so.0.3.0 ${D}${libdir}/libtgbscomm.so.0
 	ln -sf libtgbscomm.so.0 ${D}${libdir}/libtgbscomm.so
 	install -m 0644 types.h queuing.h sampling.h ${D}${includedir}/tgbs/
 	install -m 0644 tgbscomm.pc ${D}${libdir}/pkgconfig
