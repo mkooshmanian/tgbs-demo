@@ -21,7 +21,7 @@ check_file() {
 }
 
 QEMU_KERNEL="$DEPLOY_DIR/qemuarm32/zImage"
-QEMU_ROOTFS="$DEPLOY_DIR/qemuarm32/tgbs-demo-image-qemuarm32.rootfs.ext4"
+QEMU_ROOTFS="$DEPLOY_DIR/qemuarm32/tgbs-demo-image-qemuarm32.rootfs.wic"
 ZYBO_SDCARD="$DEPLOY_DIR/zybo-z7/tgbs-demo-image-zybo-z7.rootfs.wic"
 
 for file in \
@@ -52,7 +52,7 @@ trap 'rm -rf -- "$STAGING_DIR"' EXIT
 
 mkdir -- "$STAGING_DIR/$QEMU_NAME" "$STAGING_DIR/$ZYBO_NAME"
 cp -L -- "$QEMU_KERNEL" "$STAGING_DIR/$QEMU_NAME/zImage"
-cp -L -- "$QEMU_ROOTFS" "$STAGING_DIR/$QEMU_NAME/rootfs.ext4"
+cp -L -- "$QEMU_ROOTFS" "$STAGING_DIR/$QEMU_NAME/disk.wic"
 install -m 0755 -- "$PROJECT_DIR/tools/run-qemu.sh" "$PROJECT_DIR/tools/ssh-qemu.sh" "$STAGING_DIR/$QEMU_NAME/"
 
 cat > "$STAGING_DIR/$QEMU_NAME/README.md" <<'EOF'
@@ -67,6 +67,10 @@ Install `qemu-system-arm`, then from this directory run:
 The serial console is in the terminal. Log in as `root` without a password.
 In another terminal, run `./ssh-qemu.sh` for SSH. A VNC viewer can connect to
 `localhost:5900` after the demo starts its VNC service.
+
+`disk.wic` contains the read-only base and a writable partition for all
+overlays. System and container changes survive shutdown and later launches
+using the same disk file. Replacing it with a fresh image resets the state.
 EOF
 
 cp -L -- "$ZYBO_SDCARD" "$STAGING_DIR/$ZYBO_NAME/sdcard.wic"

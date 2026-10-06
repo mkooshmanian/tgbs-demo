@@ -2,52 +2,79 @@
 #
 # SPDX-License-Identifier: MIT
 #
-# Run as PID 1 via init=/sbin/tgbs-preinit, before SysV init opens /etc.
-# The original root mount stays read-only at /rofs. Every writable root,
-# including the host's, uses its own upper rather than another live overlay.
+# Run as PID 1 before SysV init. Both the system and containers have independent
+# persistent uppers over the same read-only image.
 
 set -eu
 PATH=/sbin:/bin:/usr/sbin:/usr/bin
 export PATH
+umask 077
 
 trap 'echo "tgbs-preinit: ERROR - root overlay setup failed; refusing to start init" >&2' 0
+[ "$$" -eq 1 ] || exit 1
 
-[ "$$" -eq 1 ] || {
-	echo "tgbs-preinit: ERROR - must run as PID 1" >&2
-	exit 1
-}
+STORE=/var/lib/tgbs
+RUNTIME=/run/tgbs/rootfs
+STATE_DEVICE=LABEL=tgbs-state
 
-# All mountpoints are installed in the image; never remount the base writable
-# to prepare them. /dev is normally already provided by CONFIG_DEVTMPFS_MOUNT.
 [ -e /dev/console ] || mount -n -t devtmpfs devtmpfs /dev
 mount -n -t proc proc /proc
 mount -n -t sysfs sysfs /sys
-# BusyBox consults /proc/mounts to resolve a remount of /.
 mount -n -o remount,ro /
 mount --make-rprivate /
 
-# /run is only a staging mount here. Move it outside /rofs after pivot_root,
-# so /rofs contains no writable submounts and SysV can mount its usual /run.
-mount -n -t tmpfs -o mode=0700,nosuid,nodev tmpfs /run
-mkdir -m 0700 /run/upper /run/work /run/merged
-mount -n -t overlay -o lowerdir=/,upperdir=/run/upper,workdir=/run/work overlay /run/merged
-mkdir -p /run/merged/rofs /run/merged/.tgbs-overlay
-chmod 0700 /run/merged/.tgbs-overlay
+for argument in $(cat /proc/cmdline); do
+	case "$argument" in
+		tgbs.state=*) STATE_DEVICE=${argument#tgbs.state=} ;;
+	esac
+done
 
-# These mounts are independent of the base and must remain available to init.
+# The mountpoint is installed in the image. Never format a device at boot.
+mount -n -t ext4 -o nosuid,nodev "$STATE_DEVICE" "$STORE"
+chmod 0700 "$STORE"
+image_id=$(cat /etc/tgbs-rootfs-id)
+[ "${#image_id}" -eq 64 ]
+if [ -e "$STORE/rootfs-id" ]; then
+	[ ! -L "$STORE/rootfs-id" ]
+	if [ "$(cat "$STORE/rootfs-id")" != "$image_id" ]; then
+		echo "tgbs-preinit: ERROR - persistent overlays belong to another rootfs image" >&2
+		exit 1
+	fi
+else
+	# Do not adopt existing uppers whose base cannot be identified.
+	[ ! -e "$STORE/overlays" ]
+	[ ! -L "$STORE/rootfs-id.tmp" ]
+	printf '%s\n' "$image_id" > "$STORE/rootfs-id.tmp"
+	sync
+	mv "$STORE/rootfs-id.tmp" "$STORE/rootfs-id"
+	sync
+fi
+mkdir -p "$STORE/overlays/system/upper" "$STORE/overlays/system/work" "$STORE/overlays/containers"
+
+# Retain only the static filesystem, without its submounts. The first /run
+# serves as temporary staging and is discarded after the pivot.
+mount -n -t tmpfs -o mode=0700,nosuid,nodev tmpfs /run
+mkdir /run/base /run/merged
+mount -n --bind / /run/base
+mount -n -t overlay -o "lowerdir=/run/base,upperdir=$STORE/overlays/system/upper,workdir=$STORE/overlays/system/work" overlay /run/merged
+
+# Prepare the final /run before pivoting. SysV's mount -a keeps this mount.
+mount -n -t tmpfs -o mode=0755,nosuid,nodev,strictatime tmpfs /run/merged/run
+mkdir -p "/run/merged$RUNTIME/base" "/run/merged$RUNTIME/old-root"
+chmod 0755 /run/merged/run/tgbs "/run/merged$RUNTIME"
+mount -n --move /run/base "/run/merged$RUNTIME/base"
 mount -n --move /dev /run/merged/dev
 mount -n --move /proc /run/merged/proc
 mount -n --move /sys /run/merged/sys
-pivot_root /run/merged /run/merged/rofs
+pivot_root /run/merged "/run/merged$RUNTIME/old-root"
 cd /
-mount -n --move /rofs/run /.tgbs-overlay
+mount -n --move "$RUNTIME/old-root$STORE" "$STORE"
+umount -l "$RUNTIME/old-root"
+rmdir "$RUNTIME/old-root"
 
-# read-only-rootfs configures SysV for a read-only /. Here it is the original
-# filesystem at /rofs that is read-only; the new / is a writable overlay.
-# Change only the host upper, leaving the shared image untouched. In particular,
-# checkroot must neither fsck the overlay nor remount it read-only at S05.
+# Adjust only the system upper: never fsck the overlay or remount it read-only.
 sed -i '/^[^#[:space:]][^[:space:]]*[[:space:]][[:space:]]*\/[[:space:]]/c\overlay / overlay rw 0 0' /etc/fstab
 sed -i 's/^ROOTFS_READ_ONLY=yes$/ROOTFS_READ_ONLY=no/' /etc/default/rcS
 
-echo "tgbs-preinit: writable tmpfs overlay ready; static rootfs at /rofs"
+echo "tgbs-preinit: persistent system overlay ready; static base at $RUNTIME/base"
 exec /sbin/init "$@"

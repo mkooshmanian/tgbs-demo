@@ -1,11 +1,11 @@
 SUMMARY = "Daemonless runtime and control tool for TGBS cgroups"
-DESCRIPTION = "tgbsctl creates and observes TGBS cgroups directly under /sys/fs/cgroup and manages immutable queuing and sampling communication-channel contracts under /run/tgbs. It can run a command without CAP_SYS_ADMIN as PID 1 in dedicated PID, mount, UTS, IPC, and cgroup namespaces with an ephemeral overlay rootfs and private runtime mounts, inspect its state, kill or freeze its processes, and update its runtime, period, CPU placement, or reclaim policy without a daemon. The cgroup lifetime is tied to the main process."
+DESCRIPTION = "tgbsctl manages TGBS cgroups and immutable communication channels without a daemon. Commands run as PID 1 in private namespaces over a shared static base, with persistent per-domain uppers by default or an optional ephemeral tmpfs upper. Private runtime mounts and removal of CAP_SYS_ADMIN protect the prepared mount view."
 LICENSE = "MIT"
 LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda2f7b4f302"
 
 FILESEXTRAPATHS:prepend := "${THISDIR}/../channel-common/files:"
 
-SRC_URI = "file://tgbsctl.c file://tgbsctl.h file://run.c file://observe.c file://control.c file://channel.c file://channel-contract.c file://channel-contract.h file://queuing-format.h file://sampling-format.h"
+SRC_URI = "file://tgbsctl.c file://tgbsctl.h file://run.c file://rootfs.c file://observe.c file://control.c file://channel.c file://channel-contract.c file://channel-contract.h file://queuing-format.h file://sampling-format.h"
 
 S = "${WORKDIR}"
 
@@ -14,7 +14,7 @@ RDEPENDS:${PN} += "tgbs-runtime-init"
 CFLAGS:append = " -Wall -Wextra"
 
 do_compile() {
-	${CC} ${CFLAGS} ${LDFLAGS} tgbsctl.c run.c observe.c control.c channel.c channel-contract.c -o tgbsctl
+	${CC} ${CFLAGS} ${LDFLAGS} tgbsctl.c run.c rootfs.c observe.c control.c channel.c channel-contract.c -o tgbsctl
 }
 
 do_install() {

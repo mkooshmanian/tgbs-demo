@@ -20,42 +20,136 @@ fragment and described by a matching device-tree overlay.
 
 ### Shared static root filesystem
 
-The demo image enables `read-only-rootfs` and boots with
-`init=/sbin/tgbs-preinit`. The pre-init supplied by `tgbs-runtime-init` runs
-before the real init, keeps the original image mount read-only at `/rofs`, and
-pivots into an OverlayFS root with a private tmpfs upper and work directory.
-The system staging tmpfs is retained at `/.tgbs-overlay`, outside `/rofs`;
-`/dev`, `/proc`, and `/sys` are moved to the new root before init starts.
-SysV mounts `/run` and `/var/volatile` normally afterwards.
+The demo image inherits `tgbs-rootfs`, enabling `read-only-rootfs` and generating
+`/etc/tgbs-rootfs-id` from the base's file contents and metadata. Both targets
+use a WIC disk: QEMU has a root partition and an ext4 overlay partition, while
+Zybo also has a boot partition. The overlay partition is labelled
+`tgbs-state`; `TGBS_STATE_SIZE` controls its initial size in MiB (default: 16
+on Zybo, 256 on QEMU). On Zybo, `tools/upload-sdcard.sh` expands partition 3
+and its ext4 filesystem to fill the remaining SD-card space after flashing.
+The generated WIC therefore only needs a small empty store. Flashing it with
+another tool leaves that initial size until the partition and filesystem are
+expanded separately. QEMU keeps its allocated capacity between launches.
 
-The pre-init adjusts `/etc/fstab` and `/etc/default/rcS` only in the system's
-upper: SysV must treat the new `/` as writable and must not fsck the overlay.
-The original configuration remains unchanged in `/rofs`. A setup failure
-stops boot before the real init; there is no fallback to a writable base.
-The existing SysV `tgbs` script still prepares cgroups and channel storage.
-
-The host and every container use the same static base independently:
+Boot uses `init=/sbin/tgbs-preinit`. Before the real init, the pre-init mounts
+the overlay partition at `/var/lib/tgbs`, creates the system overlay, and
+retains a non-recursive read-only bind of the static image at
+`/run/tgbs/rootfs/base`. A private tmpfs `/run` is installed before init and
+kept by SysV. Neither the shared base nor the data store contains the temporary
+staging mounts after the pivot.
 
 ```text
-read-only image at /rofs
-├── + system tmpfs upper       → host /
-├── + container A tmpfs upper  → container A /
-└── + container B tmpfs upper  → container B /
+/run/tgbs/rootfs/base/              read-only shared base
+/var/lib/tgbs/                     writable ext4 data partition
+├── rootfs-id                      identity of the associated base
+└── overlays/
+    ├── system/
+    │   ├── upper/
+    │   └── work/
+    └── containers/
+        └── NAME/
+            ├── upper/
+            ├── work/
+            └── lock
 ```
 
-Changes made through the host overlay are not inherited by containers. In
-particular, a configuration created or edited on the host after boot is not
-automatically available inside a domain; build shared configuration into the
-image. All uppers are volatile: system changes disappear on reboot, and
-container changes disappear when the domain exits. Persistent storage is not
-configured in this version. Do not remount `/rofs` writable or modify the
-backing image while an overlay is using it.
+The host can inspect every upper through this store. Containers see only their
+own merged filesystem: the base has an empty store mountpoint and their private
+`/run` does not expose the host base or runtime markers. Host changes are not
+inherited by containers. Build shared configuration into the image.
 
-QEMU's generated boot configuration, the standalone QEMU launcher, and the
-Zybo extlinux configuration select the pre-init and a read-only initial root.
-For another image using `meta-tgbs`, enable `read-only-rootfs`, include the
-runtime package, and supply the same kernel arguments. This pre-init expects
-a directly mounted disk root filesystem, as used by these two targets.
+By default, a domain name identifies persistent storage. Stopping the domain
+removes its cgroup and runtime marker, but retains its upper and work directory.
+An exclusive storage lock is held by the supervisor through cleanup; OverlayFS
+also rejects active upper/work sharing. `tgbsctl run --ephemeral ...` uses a
+private tmpfs upper without changing the stored persistent upper. The domain
+names `channels` and `rootfs` are reserved.
+
+The system upper persists across reboots, as do container files outside volatile
+mounts. `/run`, `/tmp`, and `/var/volatile` (including `/var/log`) remain
+volatile on both the host and containers. Dropbear's key under
+`/var/lib/dropbear` is persistent on the host.
+
+Preserve a disk file to reuse its state between QEMU launches. Do not use
+QEMU's snapshot mode to validate persistence across separate launches.
+
+A missing/unmountable data volume stops boot before init. The default device
+is `LABEL=tgbs-state`; `tgbs.state=/dev/...` can override it on the kernel
+command line. No device is formatted at boot. Persistent domain startup refuses
+a missing, non-ext4, read-only or mismatched store rather than writing into the
+host overlay. Do not change a base or an upper directly while its overlay is
+mounted. There is no runtime storage reset command in this version; back up and
+reset storage only with the corresponding overlay stopped (the system upper
+requires an offline reset).
+
+The pre-init adjusts `/etc/fstab` and `/etc/default/rcS` in the system upper so
+SysV treats its root as writable and does not fsck the overlay. The original
+configuration remains in the static image. Other images using this runtime
+should inherit `tgbs-rootfs`, provide the data partition and select the pre-init.
+This boot flow expects a directly mounted disk root filesystem.
+
+#### Base identity and image updates
+
+The `tgbs-rootfs` image class runs `tgbs_rootfs_id` during rootfs
+post-processing. This function writes a SHA-256 identifier to
+`/etc/tgbs-rootfs-id`, using the base's paths, file contents, types, ownership,
+permissions, symlink targets and device numbers. Modification times and the
+identifier file itself are excluded. This identifies the built base; it is
+separate from the partition UUID and is not an integrity check recalculated
+at boot. Changes made through the system or container uppers do not change it.
+
+At first boot, `tgbs-preinit` records that identifier in
+`/var/lib/tgbs/rootfs-id` before creating the overlays. This associates all
+system and container uppers on the data partition with one base. On subsequent
+boots, the pre-init compares the stored identifier with the image's identifier
+before mounting the system overlay. A mismatch stops boot before the real init
+with `persistent overlays belong to another rootfs image`. `tgbsctl` also
+checks this association before starting a persistent container. An existing
+overlay store without an identifier is refused rather than adopted silently.
+
+The check prevents old uppers from being reused automatically with a changed
+base: a copied-up library can hide an updated library, and a whiteout can hide
+a file introduced by the new image. There is no automatic migration or
+deletion of old uppers. Updating the base while keeping the data partition
+therefore requires an explicit migration or an offline reset of its overlays.
+Changing only the stored identifier bypasses the check without making the old
+uppers compatible. Replacing or reflashing the entire generated WIC image
+provides a fresh empty data partition and resets both system and container state.
+
+On a running target, inspect the two identifiers with:
+
+```sh
+cat /run/tgbs/rootfs/base/etc/tgbs-rootfs-id
+cat /var/lib/tgbs/rootfs-id
+```
+
+Use the identifier from the shared base: `/etc/tgbs-rootfs-id` in the running
+system is visible through the system overlay and could have been overwritten
+in its upper.
+
+#### Checking persistence
+
+To check persistence on the target, create a host file, then enter `self`:
+
+```sh
+echo host > /home/root/host-test
+tgbs-demo-self start
+```
+
+Inside `self`, the host file is absent. Create a separate container file:
+
+```sh
+test ! -e /home/root/host-test
+echo container > /home/root/container-test
+exit
+```
+
+Starting `self` again restores `container-test`. Rebooting restores both files
+in their respective roots. The host can inspect the container's stored file at
+`/var/lib/tgbs/overlays/containers/self/upper/home/root/container-test`;
+`/run/tgbs/rootfs/base/home/root/host-test` remains absent. For a temporary
+domain, add `--ephemeral` to a `tgbsctl run` command; it starts from the base
+and discards its changes at exit without resetting the persistent upper.
 
 ### Domain startup
 
@@ -79,10 +173,10 @@ tgbsctl set worker pids-max max
 
 `run` uses `clone3(CLONE_INTO_CGROUP)` to create the command directly in its
 configured TGBS cgroup and as PID 1 in new PID, mount, UTS, IPC, and cgroup
-namespaces. The static image at `/rofs` is the lower layer of an overlayfs
-whose writable upper layer lives in a private tmpfs. Startup fails if `/rofs`
-is unavailable or writable. Applications see
-a writable root, but their changes are ephemeral and cannot overwrite regular
+namespaces. The static image at `/run/tgbs/rootfs/base` is the lower layer of
+an overlayfs whose writable upper is persistent by default. Startup fails if
+the base is unavailable or writable. Applications see
+a writable root, but their changes stay in their own upper and cannot overwrite regular
 host filesystem paths. Mount propagation is private; `/proc`, `/tmp`, and
 `/run` are private mounts, `/sys` is read-only, and `/dev` keeps the host device
 view for prototype compatibility. The cgroup namespace makes the domain appear

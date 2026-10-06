@@ -32,29 +32,30 @@ if ! sudo partprobe "$DEVICE" 2>/dev/null; then
     sudo partx -u "$DEVICE" 2>/dev/null || true
 fi
 
-# Handle partition suffix (/dev/sda2 vs /dev/mmcblk0p2)
+# The Zybo layout is boot (1), static rootfs (2), persistent overlays (3).
+# Handle partition suffix (/dev/sda3 vs /dev/mmcblk0p3).
 if [[ "$DEVICE" =~ [0-9]$ ]]; then
-    ROOT_PART="${DEVICE}p2"
+    STATE_PART="${DEVICE}p3"
 else
-    ROOT_PART="${DEVICE}2"
+    STATE_PART="${DEVICE}3"
 fi
 
-echo "==> Unmounting the rootfs partition ($ROOT_PART) if mounted…"
-sudo umount "$ROOT_PART" 2>/dev/null || true
+echo "==> Unmounting the persistent overlay partition ($STATE_PART) if mounted…"
+sudo umount "$STATE_PART" 2>/dev/null || true
 
-echo "==> Expanding partition 2 to use the full remaining space (parted)…"
-sudo parted -s "$DEVICE" resizepart 2 100%
+echo "==> Expanding partition 3 to use the full remaining space (parted)…"
+sudo parted -s "$DEVICE" resizepart 3 100%
 
 echo "==> Reloading the partition table after resizing…"
 if ! sudo partprobe "$DEVICE" 2>/dev/null; then
     sudo partx -u "$DEVICE" 2>/dev/null || true
 fi
 
-echo "==> Checking the filesystem on $ROOT_PART (e2fsck)…"
-sudo e2fsck -f "$ROOT_PART"
+echo "==> Checking the filesystem on $STATE_PART (e2fsck)…"
+sudo e2fsck -f "$STATE_PART"
 
 echo "==> Resizing the filesystem to fill the partition (resize2fs)…"
-sudo resize2fs "$ROOT_PART"
+sudo resize2fs "$STATE_PART"
 
 echo "Done."
-echo "The rootfs partition ($ROOT_PART) should now use all available space on the SD card."
+echo "The persistent overlay partition ($STATE_PART) should now use all remaining space on the SD card."

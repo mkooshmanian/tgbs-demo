@@ -19,7 +19,6 @@
 #include <sys/mount.h>
 #include <sys/prctl.h>
 #include <sys/stat.h>
-#include <sys/statvfs.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -28,7 +27,8 @@ static volatile sig_atomic_t g_signal = 0;
 
 enum run_option {
 	OPT_MEMORY_MAX = 256,
-	OPT_PIDS_MAX
+	OPT_PIDS_MAX,
+	OPT_EPHEMERAL
 };
 
 static void signal_handler(int sig)
@@ -119,66 +119,6 @@ static int report_mount_error(const char *operation, const char *path)
 	return -1;
 }
 
-static int setup_overlay_root(void)
-{
-	struct statvfs lower_stat;
-	static const char stage[] = "/run/.tgbs-root";
-	static const char upper[] = "/run/.tgbs-root/upper";
-	static const char work[] = "/run/.tgbs-root/work";
-	static const char merged[] = "/run/.tgbs-root/merged";
-	static const char old_root[] = "/run/.tgbs-root/merged/.tgbs-old-root";
-	static const char overlay_options[] =
-		"lowerdir=" ROOTFS_LOWER ",upperdir=/run/.tgbs-root/upper,"
-		"workdir=/run/.tgbs-root/work";
-
-	/* Fail closed when early init has not provided the immutable shared base.
-	 * Using the live host / as a fallback would reintroduce lower-layer writes. */
-	if (statvfs(ROOTFS_LOWER, &lower_stat) != 0)
-		return report_mount_error("unable to inspect static rootfs at",
-			ROOTFS_LOWER);
-	if (!(lower_stat.f_flag & ST_RDONLY)) {
-		errno = EROFS;
-		return report_mount_error("static rootfs is not read-only at",
-			ROOTFS_LOWER);
-	}
-
-	/* The staging tmpfs contains the private writable layer. It is mounted on
-	 * /run so creating its directories never modifies the host rootfs. */
-	if (mount("tmpfs", "/run", "tmpfs", MS_NOSUID | MS_NODEV,
-			"mode=0700") != 0)
-		return report_mount_error("unable to mount rootfs staging tmpfs at",
-			"/run");
-	if (mkdir_if_missing(stage, 0700) != 0 ||
-	    mkdir_if_missing(upper, 0700) != 0 ||
-	    mkdir_if_missing(work, 0700) != 0 ||
-	    mkdir_if_missing(merged, 0700) != 0)
-		return report_mount_error("unable to create rootfs staging directory at",
-			stage);
-
-	if (mount("overlay", merged, "overlay", 0, overlay_options) != 0)
-		return report_mount_error("unable to mount overlay root at", merged);
-	if (mkdir(old_root, 0700) != 0)
-		return report_mount_error("unable to create old-root mountpoint at",
-			old_root);
-	if (syscall(SYS_pivot_root, merged, old_root) != 0)
-		return report_mount_error("unable to pivot to overlay root at", merged);
-	if (chdir("/") != 0)
-		return report_mount_error("unable to enter overlay root at", "/");
-
-	/* Preserve the current device view for prototype compatibility. Since the
-	 * entire mount namespace is private, this bind cannot propagate back. */
-	if (mount("/.tgbs-old-root/dev", "/dev", NULL,
-			MS_BIND | MS_REC, NULL) != 0)
-		return report_mount_error("unable to expose host device view at", "/dev");
-
-	if (umount2("/.tgbs-old-root", MNT_DETACH) != 0)
-		return report_mount_error("unable to detach old root at",
-			"/.tgbs-old-root");
-	if (rmdir("/.tgbs-old-root") != 0)
-		return report_mount_error("unable to remove old-root mountpoint at",
-			"/.tgbs-old-root");
-	return 0;
-}
 
 static int setup_channel_mounts(const struct channel_mount_plan *plan)
 {
@@ -261,17 +201,21 @@ static int setup_channel_mounts(const struct channel_mount_plan *plan)
 	return 0;
 }
 
-static int setup_container_mounts(const struct channel_mount_plan *plan)
+static int setup_container_mounts(const struct channel_mount_plan *plan,
+	struct rootfs_plan *rootfs)
 {
 	/* Keep mounts created by the container from propagating to the host. */
 	if (mount(NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL) != 0)
 		return -1;
-	if (setup_overlay_root() != 0)
+	if (rootfs_mount(rootfs) != 0)
 		return -1;
 
-	/* Yocto keeps /tmp and /var/log below a volatile tmpfs mounted by init.
-	 * Submount contents are intentionally absent from an overlay lower layer,
-	 * so recreate the corresponding private directories in the upper layer. */
+	/* Match the host's volatile layout, including /var/log. /run was already
+	 * prepared by rootfs_mount and must not be replaced here. */
+	if (mount("tmpfs", "/var/volatile", "tmpfs", MS_NOSUID | MS_NODEV,
+			"mode=0755") != 0)
+		return report_mount_error("unable to mount private volatile filesystem at",
+			"/var/volatile");
 	if (mkdir_if_missing("/var/volatile", 0755) != 0 ||
 	    mkdir_if_missing("/var/volatile/tmp", 01777) != 0 ||
 	    mkdir_if_missing("/var/volatile/log", 0755) != 0)
@@ -280,9 +224,6 @@ static int setup_container_mounts(const struct channel_mount_plan *plan)
 	if (mount("tmpfs", "/tmp", "tmpfs", MS_NOSUID | MS_NODEV,
 			"mode=1777") != 0)
 		return report_mount_error("unable to mount private tmpfs at", "/tmp");
-	if (mount("tmpfs", "/run", "tmpfs", MS_NOSUID | MS_NODEV,
-			"mode=0755") != 0)
-		return report_mount_error("unable to mount private tmpfs at", "/run");
 	if (mkdir_if_missing("/run/lock", 0755) != 0)
 		return report_mount_error("unable to create private runtime path at",
 			"/run/lock");
@@ -403,6 +344,7 @@ int cmd_run(int argc, char **argv)
 	char pids_max[32] = "max";
 	int reclaim = 0;
 	int reclaim_set = 0;
+	int ephemeral = 0;
 	int opt;
 	int cmd_index = 0;
 	char name_path[288];
@@ -416,6 +358,7 @@ int cmd_run(int argc, char **argv)
 	int topology_fd = -1;
 	int cgroup_fd = -1;
 	struct channel_mount_plan channel_mounts = {0};
+	struct rootfs_plan rootfs;
 
 	/* The 'run' subcommand is argv[1]; options follow it. Start getopt at
 	 * argv[2] so 'run' is skipped; the command is whatever getopt leaves at
@@ -435,6 +378,7 @@ int cmd_run(int argc, char **argv)
 		{"reclaim", required_argument, NULL, 'R'},
 		{"memory-max", required_argument, NULL, OPT_MEMORY_MAX},
 		{"pids-max", required_argument, NULL, OPT_PIDS_MAX},
+		{"ephemeral", no_argument, NULL, OPT_EPHEMERAL},
 		{"help", no_argument, NULL, 'h'},
 		{0, 0, 0, 0},
 	};
@@ -476,6 +420,9 @@ int cmd_run(int argc, char **argv)
 					sizeof(pids_max)) != 0)
 				error_exit("--pids-max must be a positive count or max");
 			break;
+		case OPT_EPHEMERAL:
+			ephemeral = 1;
+			break;
 		default:
 			usage(argv[0]);
 			return 2;
@@ -510,10 +457,13 @@ int cmd_run(int argc, char **argv)
 	if (runtime_us > period_us)
 		error_exit("--runtime-us must be <= --period-us");
 
-	if (strcmp(name, "channels") == 0)
-		error_exit("the domain name 'channels' is reserved by the runtime");
+	if (strcmp(name, "channels") == 0 || strcmp(name, "rootfs") == 0)
+		error_exit("the domain name '%s' is reserved by the runtime", name);
 
 	verify_cgroup_env();
+	if (rootfs_plan_prepare(name, ephemeral, &rootfs) != 0)
+		error_exit("unable to prepare %s rootfs for %s: %s",
+			ephemeral ? "ephemeral" : "persistent", name, strerror(errno));
 
 	/* Keep the topology stable until the child has entered its cgroup. */
 	topology_fd = channel_topology_lock(0);
@@ -638,6 +588,7 @@ int cmd_run(int argc, char **argv)
 
 		close(cgroup_fd);
 		channel_mount_plan_close(&channel_mounts);
+		rootfs_plan_close(&rootfs);
 		cleanup_run(name);
 		errno = saved_errno;
 		error_exit("clone3 into cgroup %s failed: %s", name_path,
@@ -648,9 +599,10 @@ int cmd_run(int argc, char **argv)
 		int setup_errno;
 
 		close(cgroup_fd);
-		if (setup_container_mounts(&channel_mounts) != 0) {
+		if (setup_container_mounts(&channel_mounts, &rootfs) != 0) {
 			setup_errno = errno;
 			channel_mount_plan_close(&channel_mounts);
+			rootfs_plan_close(&rootfs);
 			channel_topology_unlock(topology_fd);
 			fprintf(stderr,
 				"tgbsctl: ERROR - unable to prepare container mounts: %s\n",
@@ -658,6 +610,7 @@ int cmd_run(int argc, char **argv)
 			_exit(127);
 		}
 		channel_mount_plan_close(&channel_mounts);
+		rootfs_plan_close(&rootfs);
 		channel_topology_unlock(topology_fd);
 		if (hostname != NULL && sethostname(hostname, strlen(hostname)) != 0) {
 			fprintf(stderr, "tgbsctl: ERROR - unable to set hostname to '%s': %s\n",
@@ -677,6 +630,8 @@ int cmd_run(int argc, char **argv)
 	}
 
 	close(cgroup_fd);
+	/* The supervisor holds the exclusive storage lock through domain cleanup. */
+	rootfs_plan_close_layers(&rootfs);
 	channel_mount_plan_close(&channel_mounts);
 	channel_topology_unlock(topology_fd);
 	topology_fd = -1;
@@ -710,6 +665,7 @@ int cmd_run(int argc, char **argv)
 		cgroup_kill(name);
 		printf("tgbsctl: interrupted by signal %d, cgroup %s torn down\n", sig, name);
 		cleanup_run(name);
+		rootfs_plan_close(&rootfs);
 		return 128 + sig;
 	}
 
@@ -717,15 +673,18 @@ int cmd_run(int argc, char **argv)
 		int rc = WEXITSTATUS(status);
 		printf("tgbsctl: command exited with code %d\n", rc);
 		cleanup_run(name);
+		rootfs_plan_close(&rootfs);
 		return rc;
 	}
 	if (WIFSIGNALED(status)) {
 		int sig = WTERMSIG(status);
 		printf("tgbsctl: command killed by signal %d\n", sig);
 		cleanup_run(name);
+		rootfs_plan_close(&rootfs);
 		return 128 + sig;
 	}
 
 	cleanup_run(name);
+	rootfs_plan_close(&rootfs);
 	return 1;
 }

@@ -3,6 +3,6 @@ DESCRIPTION = "A minimal TGBS image with a VNC control display and an isolated D
 
 require recipes-core/images/core-image-minimal.bb
 
-IMAGE_FEATURES += "read-only-rootfs"
+inherit tgbs-rootfs
 
 IMAGE_INSTALL:append = " packagegroup-tgbs-runtime packagegroup-tgbs-demo"

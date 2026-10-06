@@ -132,12 +132,20 @@ runqemu qemuarm32 slirp nographic
 
 The demo image allows direct root login without a password.
 
-The original rootfs is mounted read-only at `/rofs`. An early init installs
-an OverlayFS root for the system, and `tgbsctl` gives each container a separate
-overlay over that same static image. All writable layers use tmpfs: host
-filesystem changes disappear on reboot and container changes disappear on
-exit. Host changes are not inherited by containers; shared files belong in
-the built image. See [the runtime filesystem layout](src/meta-tgbs/README.md#shared-static-root-filesystem).
+The original rootfs is available read-only at `/run/tgbs/rootfs/base`. An early
+init installs an OverlayFS root for the system, and `tgbsctl` gives each
+container a separate overlay over that same static image. The WIC disk has a
+dedicated ext4 data partition, mounted at `/var/lib/tgbs`, containing all
+persistent uppers. Host and container changes survive reboot and domain exit;
+host changes are not inherited by containers. `/run`, `/tmp` and `/var/volatile`
+remain volatile. `tgbsctl run --ephemeral` selects a private tmpfs upper.
+See [the runtime filesystem layout](src/meta-tgbs/README.md#shared-static-root-filesystem).
+
+Persistent uppers are associated with the built base through
+`/etc/tgbs-rootfs-id` and `/var/lib/tgbs/rootfs-id`. Changing the base while
+keeping its data partition blocks boot if the identifiers differ; there is no
+automatic migration. See [base identity and image updates](src/meta-tgbs/README.md#base-identity-and-image-updates)
+before reusing persistent state with a new image.
 
 ### Running the demonstration
 

@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: MIT
+# QEMU loads the kernel separately; the disk contains the base and overlay store.
+part / --source rootfs --ondisk vda --fstype=ext4 --label root --align 4
+part --ondisk vda --fstype=ext4 --label tgbs-state --align 4 --fixed-size ${TGBS_STATE_SIZE}

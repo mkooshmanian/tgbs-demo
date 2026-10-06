@@ -25,7 +25,21 @@
 #endif
 
 /* Original image mount retained by tgbs-preinit, never the host overlay. */
-#define ROOTFS_LOWER "/rofs"
+#define ROOTFS_LOWER RUN_ROOT "/rootfs/base"
+#define ROOTFS_STORE "/var/lib/tgbs"
+
+struct rootfs_plan {
+	int lower_fd;
+	int upper_fd;
+	int work_fd;
+	int domain_fd;
+	int lock_fd;
+};
+
+int rootfs_plan_prepare(const char *name, int ephemeral, struct rootfs_plan *plan);
+void rootfs_plan_close_layers(struct rootfs_plan *plan);
+void rootfs_plan_close(struct rootfs_plan *plan);
+int rootfs_mount(struct rootfs_plan *plan);
 
 #define CPU_LIST_SIZE 4096
 #ifndef CHANNEL_ROOT

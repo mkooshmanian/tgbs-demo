@@ -394,7 +394,8 @@ int cmd_list(void)
 	while ((ent = readdir(dir)) != NULL) {
 		if (ent->d_name[0] == '.')
 			continue;
-		if (strcmp(ent->d_name, "channels") == 0)
+		if (strcmp(ent->d_name, "channels") == 0 ||
+		    strcmp(ent->d_name, "rootfs") == 0)
 			continue;
 
 		pid_t pid = 0;

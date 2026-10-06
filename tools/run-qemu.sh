@@ -8,7 +8,7 @@ if ! command -v qemu-system-arm >/dev/null 2>&1; then
     exit 1
 fi
 
-for image in zImage rootfs.ext4; do
+for image in zImage disk.wic; do
     if [[ ! -s "$BUNDLE_DIR/$image" ]]; then
         echo "Error: missing or empty image: $BUNDLE_DIR/$image" >&2
         exit 1
@@ -21,8 +21,8 @@ exec qemu-system-arm \
     -smp 2 \
     -m 1024 \
     -kernel "$BUNDLE_DIR/zImage" \
-    -append 'root=/dev/vda ro init=/sbin/tgbs-preinit console=ttyAMA0,115200 ip=dhcp net.ifnames=0 swiotlb=0' \
-    -drive "id=disk0,file=$BUNDLE_DIR/rootfs.ext4,if=none,format=raw" \
+    -append 'root=/dev/vda1 ro init=/sbin/tgbs-preinit console=ttyAMA0,115200 ip=dhcp net.ifnames=0 swiotlb=0' \
+    -drive "id=disk0,file=$BUNDLE_DIR/disk.wic,if=none,format=raw" \
     -device virtio-blk-device,drive=disk0 \
     -netdev user,id=net0,hostfwd=tcp:127.0.0.1:2222-:22,hostfwd=tcp:127.0.0.1:5900-:5900 \
     -device virtio-net-device,netdev=net0,mac=52:54:00:12:35:01 \
