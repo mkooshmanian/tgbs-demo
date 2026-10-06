@@ -14,7 +14,7 @@ usage()
 {
     cat <<EOF
 Usage:
-  tgbs-demo-doom start
+  tgbs-demo-doom [start]
   tgbs-demo-doom stop
   tgbs-demo-doom pause
   tgbs-demo-doom resume
@@ -22,6 +22,8 @@ Usage:
   tgbs-demo-doom set period_us PERIOD
   tgbs-demo-doom set cpus CPUS
   tgbs-demo-doom set reclaim RECLAIM
+
+With no arguments, runs 'start'.
 
 Default TGBS contract:
   runtime:  ${DEFAULT_RUNTIME_US} us
@@ -89,6 +91,10 @@ set_value()
             ;;
     esac
 }
+
+if [ "$#" -eq 0 ]; then
+    set -- start
+fi
 
 case "${1:-}" in
     start)

@@ -2,6 +2,10 @@
 
 Yocto/OpenEmbedded layer containing components specific to the TGBS demonstration.
 
+The `tgbs-demo-self`, `tgbs-demo-doom`, `tgbs-demo-mixed` and `tgbs-demo-comm`
+commands default to `start` when called without arguments. Use `--help` to
+display their usage.
+
 ## System summary
 
 `tgbs-fetch` is a lightweight, dependency-free equivalent to `fastfetch`
@@ -21,7 +25,7 @@ TGBS availability, and number of active TGBS domains. Use `--no-color` or set
 mount, UTS, and IPC namespace set and in the `self` TGBS domain:
 
 ```sh
-tgbs-demo-self start
+tgbs-demo-self
 ```
 
 The shell displays its cgroup and namespace identifiers on entry. Type `exit`
@@ -46,7 +50,7 @@ All three domains run in the background and write separately to
 `/var/log/tgbs-demo/comm-a.log`, `comm-b.log` and `comm-c.log`:
 
 ```sh
-tgbs-demo-comm start
+tgbs-demo-comm
 tgbs-demo-comm logs
 tgbs-demo-comm stop
 ```
@@ -74,7 +78,7 @@ either order:
 tgbs-demo-mixed-timeline
 
 # Control terminal
-tgbs-demo-mixed start
+tgbs-demo-mixed
 ```
 
 Use `tgbs-demo-mixed pause [CONFIG]` and `tgbs-demo-mixed resume [CONFIG]`

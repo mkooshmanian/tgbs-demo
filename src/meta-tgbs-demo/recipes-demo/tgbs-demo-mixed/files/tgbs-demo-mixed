@@ -9,7 +9,7 @@ usage()
 {
     cat <<EOF
 Usage:
-  tgbs-demo-mixed start [CONFIG]
+  tgbs-demo-mixed [start [CONFIG]]
   tgbs-demo-mixed stop [CONFIG]
   tgbs-demo-mixed pause [CONFIG]
   tgbs-demo-mixed resume [CONFIG]
@@ -18,6 +18,7 @@ Usage:
   tgbs-demo-mixed set cpus CPUS [CONFIG]
   tgbs-demo-mixed set reclaim RECLAIM [CONFIG]
 
+With no arguments, runs 'start'.
 CONFIG defaults to ${DEFAULT_CONFIG}.
 The current implementation supports one subsystem with one DEADLINE vCPU and
 an arbitrary number of TaskRT/FIFO or TaskQoS/OTHER tasks.
@@ -160,6 +161,10 @@ set_value()
             ;;
     esac
 }
+
+if [ "$#" -eq 0 ]; then
+    set -- start
+fi
 
 case "${1:-}" in
     start)

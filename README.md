@@ -141,11 +141,15 @@ the built image. See [the runtime filesystem layout](src/meta-tgbs/README.md#sha
 
 ### Running the demonstration
 
+The `tgbs-demo-self`, `tgbs-demo-doom`, `tgbs-demo-mixed` and `tgbs-demo-comm`
+commands default to `start` when called without arguments. Use `--help` to
+display their usage.
+
 To enter an interactive container and inspect its PID, cgroup and namespaces,
 run:
 
 ```sh
-tgbs-demo-self start
+tgbs-demo-self
 ```
 
 The shell remains attached to the current terminal. Type `exit` or press
@@ -155,8 +159,8 @@ After booting the target, start the example domains from a control shell.
 The commands launch their domains in the background:
 
 ```sh
-tgbs-demo-doom start
-tgbs-demo-mixed start
+tgbs-demo-doom
+tgbs-demo-mixed
 ```
 
 Open two additional SSH sessions for the live monitors:
@@ -185,7 +189,7 @@ has no password and is intended only for the isolated demonstration network.
 Start the bidirectional communication example and follow both domain logs with:
 
 ```sh
-tgbs-demo-comm start
+tgbs-demo-comm
 tail -f /var/log/tgbs-demo/comm-a.log /var/log/tgbs-demo/comm-b.log
 ```
 

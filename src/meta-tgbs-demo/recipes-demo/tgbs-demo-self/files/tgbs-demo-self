@@ -13,7 +13,9 @@ usage()
 {
     cat <<EOF
 Usage:
-  tgbs-demo-self start
+  tgbs-demo-self [start]
+
+With no arguments, runs 'start'.
 
 Open an interactive shell inside the '${DOMAIN}' TGBS domain.
 Leave the container and remove its domain with 'exit' or Ctrl-D.
@@ -24,6 +26,10 @@ TGBS contract:
   cpus:     ${CPUS}
 EOF
 }
+
+if [ "$#" -eq 0 ]; then
+    set -- start
+fi
 
 case "${1:-}" in
     start)

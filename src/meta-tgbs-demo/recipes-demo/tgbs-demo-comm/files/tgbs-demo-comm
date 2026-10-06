@@ -24,9 +24,11 @@ usage()
 {
     cat <<EOF
 Usage:
-  tgbs-demo-comm start
+  tgbs-demo-comm [start]
   tgbs-demo-comm stop
   tgbs-demo-comm logs
+
+With no arguments, runs 'start'.
 
 Logs:
   ${LOG_A}
@@ -166,6 +168,10 @@ stop()
     delete_channel "${CHANNEL_C_TO_AB}"
     echo "TGBS communication demo stopped."
 }
+
+if [ "$#" -eq 0 ]; then
+    set -- start
+fi
 
 case "${1:-}" in
     start)
