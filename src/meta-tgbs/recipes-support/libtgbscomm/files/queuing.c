@@ -23,13 +23,13 @@
 #include <unistd.h>
 
 #define SOURCE_LOCK "/endpoint/source.lock"
-#define RECEIVER_LOCK "/endpoint/receiver.lock"
+#define DESTINATION_LOCK "/endpoint/destination.lock"
 
 struct tgbs_queuing_channel {
 	int fd;
 	int lifetime_fd;
 	int source_lock_fd;
-	int receiver_lock_fd;
+	int destination_lock_fd;
 	tgbs_channel_direction_t direction;
 	size_t max_message_size;
 	char socket_path[sizeof(((struct sockaddr_un *)0)->sun_path)];
@@ -206,15 +206,15 @@ static int open_destination(struct tgbs_queuing_channel *channel, const char *na
 	socklen_t address_length;
 	struct stat socket_stat;
 
-	channel->receiver_lock_fd = open_endpoint_lock(name, RECEIVER_LOCK);
-	if (channel->receiver_lock_fd < 0)
+	channel->destination_lock_fd = open_endpoint_lock(name, DESTINATION_LOCK);
+	if (channel->destination_lock_fd < 0)
 		return -1;
 
 	channel->fd = socket(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC, 0);
 	if (channel->fd < 0)
 		return -1;
 
-	/* Holding receiver.lock proves that a socket left at this pathname is
+	/* Holding destination.lock proves that a socket left at this pathname is
 	 * stale. No other libtgbscomm destination can be bound concurrently. */
 	struct stat old_socket;
 	if (lstat(channel->socket_path, &old_socket) == 0) {
@@ -259,7 +259,7 @@ int tgbs_queuing_channel_open(const char *name, tgbs_channel_direction_t directi
 	channel->fd = -1;
 	channel->lifetime_fd = -1;
 	channel->source_lock_fd = -1;
-	channel->receiver_lock_fd = -1;
+	channel->destination_lock_fd = -1;
 	channel->direction = direction;
 
 	channel->lifetime_fd = tgbs_comm_open_contract(name, direction,
@@ -466,7 +466,7 @@ void tgbs_queuing_channel_close(tgbs_queuing_channel_t *channel)
 	if (channel == NULL)
 		return;
 	if (channel->direction == TGBS_CHANNEL_DESTINATION &&
-	    channel->receiver_lock_fd >= 0 && channel->socket_path[0] != '\0') {
+	    channel->destination_lock_fd >= 0 && channel->socket_path[0] != '\0') {
 		struct stat path;
 
 		if (lstat(channel->socket_path, &path) == 0 &&
@@ -478,8 +478,8 @@ void tgbs_queuing_channel_close(tgbs_queuing_channel_t *channel)
 		close(channel->fd);
 	if (channel->source_lock_fd >= 0)
 		close(channel->source_lock_fd);
-	if (channel->receiver_lock_fd >= 0)
-		close(channel->receiver_lock_fd);
+	if (channel->destination_lock_fd >= 0)
+		close(channel->destination_lock_fd);
 	if (channel->lifetime_fd >= 0)
 		close(channel->lifetime_fd);
 	free(channel);

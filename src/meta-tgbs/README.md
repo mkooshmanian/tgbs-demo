@@ -95,7 +95,7 @@ bounding set, then enables `no_new_privs` before `exec`.
 The private `/run/tgbs/channels` contains only channels whose source or one of
 the destinations matches the domain. Contracts and lifetime locks are read-only.
 For a queuing source, `source.lock` is writable while the endpoint directory is
-read-only; for a destination, the endpoint and `receiver.lock` are writable
+read-only; for a destination, the endpoint and `destination.lock` are writable
 while `source.lock` is read-only. Both views refer to the same underlying
 AF_UNIX socket directory. A domain may be both the source and destination of a
 channel; in that case both role-specific views are writable, allowing a local
@@ -149,7 +149,7 @@ still produces a distinct channel instance. The queuing runtime layout is:
 ├── lifetime.lock
 └── endpoint/
     ├── source.lock
-    ├── receiver.lock
+    ├── destination.lock
     └── channel.sock         # present while the destination is open
 ```
 
@@ -186,10 +186,10 @@ tgbs_queuing_channel_close(rx);
 ```
 
 The source takes the exclusive `source.lock` and uses an unnamed AF_UNIX
-`SOCK_DGRAM` socket. The destination takes the exclusive `receiver.lock`
+`SOCK_DGRAM` socket. The destination takes the exclusive `destination.lock`
 and binds `channel.sock`; a second open for the same direction fails with
 `EADDRINUSE`. A stale socket left by a crashed destination is removed only
-after acquiring `receiver.lock`. Open only prepares the local endpoint; the
+after acquiring `destination.lock`. Open only prepares the local endpoint; the
 source may open before the destination, provided the channel contract exists.
 Each send attempt associates the source socket with `channel.sock`, so
 `POLLOUT` can account for the destination queue as well as the sender buffer.
@@ -274,7 +274,7 @@ rejects a refresh period. Both types support message sizes up to
 period and whether the data endpoint is present. Creation and deletion check
 every participant's cgroup. Sampling creates the contract, `lifetime.lock`, and
 `endpoint/source.lock`. The `endpoint/sample` file appears on the first
-publication; there is no receiver lock or socket.
+publication; there is no destination lock or socket.
 
 The sampling API uses an opaque `tgbs_sampling_channel_t`, with
 `tgbs_sampling_channel_open()`, `write()`, `read()`, and `close()` functions

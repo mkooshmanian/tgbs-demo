@@ -26,7 +26,7 @@
 #define CONTRACT_FILE "/contract"
 #define ENDPOINT_DIR "/endpoint"
 #define SOURCE_LOCK "/endpoint/source.lock"
-#define RECEIVER_LOCK "/endpoint/receiver.lock"
+#define DESTINATION_LOCK "/endpoint/destination.lock"
 #define LIFETIME_LOCK "/lifetime.lock"
 
 static int make_channel_path(char *out, size_t outsz, const char *name,
@@ -367,7 +367,7 @@ static void cleanup_partial_channel(const char *name)
 		unlink(path);
 	if (make_channel_path(path, sizeof(path), name, SOURCE_LOCK) == 0)
 		unlink(path);
-	if (make_channel_path(path, sizeof(path), name, RECEIVER_LOCK) == 0)
+	if (make_channel_path(path, sizeof(path), name, DESTINATION_LOCK) == 0)
 		unlink(path);
 	if (make_channel_path(path, sizeof(path), name, ENDPOINT_DIR) == 0)
 		rmdir(path);
@@ -492,7 +492,7 @@ static int create_channel(int argc, char **argv)
 	    create_lock_file(name, SOURCE_LOCK) != 0)
 		goto create_failed;
 	if (contract.type == TGBS_CONTRACT_QUEUING &&
-	    create_lock_file(name, RECEIVER_LOCK) != 0)
+	    create_lock_file(name, DESTINATION_LOCK) != 0)
 		goto create_failed;
 	if (write_contract(name, &contract) != 0)
 		goto create_failed;
@@ -699,7 +699,7 @@ static int delete_channel(const char *name)
 	if (make_channel_path(path, sizeof(path), name, SOURCE_LOCK) != 0 ||
 	    remove_if_exists(path) != 0)
 		goto delete_error;
-	if (make_channel_path(path, sizeof(path), name, RECEIVER_LOCK) != 0 ||
+	if (make_channel_path(path, sizeof(path), name, DESTINATION_LOCK) != 0 ||
 	    remove_if_exists(path) != 0)
 		goto delete_error;
 	if (make_channel_path(path, sizeof(path), name, ENDPOINT_DIR) != 0 ||
