@@ -97,8 +97,42 @@ Build the Zybo Z7 image and its kernel device tree with:
 kas build kas/tgbs-demo.yml:kas/zybo-z7.yml:kas/local.yml
 ```
 
-The Zybo build deploys `boot.bin`, `u-boot.bin`, `zImage`,
+The Zybo build deploys `boot.bin`, `u-boot.img`, `zImage`,
 `zynq-zybo-z7.dtb`, and a ready-to-write `.wic` SD-card image.
+
+### Zybo Z7 WIC layout
+
+The `.wic` is a complete SD-card disk image containing three partitions:
+
+| Partition on the target | Label | Filesystem | Initial size | Contents and purpose |
+| --- | --- | --- | --- | --- |
+| `/dev/mmcblk0p1` | `boot` | FAT | 32 MiB | Bootloader, kernel, device tree and boot configuration. |
+| `/dev/mmcblk0p2` | `root` | ext4 | Calculated from the built rootfs | Static rootfs shared by the system and containers, mounted read-only. |
+| `/dev/mmcblk0p3` | `tgbs-state` | ext4 | 16 MiB by default (`TGBS_STATE_SIZE`) | Initially empty overlay store, mounted at `/var/lib/tgbs` during pre-init. |
+
+The boot partition contains:
+
+```text
+boot.bin
+u-boot.img
+zImage
+system.dtb                 # deployed from zynq-zybo-z7.dtb
+extlinux/
+└── extlinux.conf           # selects the kernel, DTB and root partition
+```
+
+At first boot, pre-init creates `rootfs-id` and `overlays/` on `tgbs-state`.
+The system and each container get their own persistent `upper/` and `work/`
+directories there; see [the runtime filesystem layout](src/meta-tgbs/README.md#shared-static-root-filesystem).
+The running system's `/` is an OverlayFS mount combining the static rootfs
+with the system upper, and the shared base remains available at
+`/run/tgbs/rootfs/base`.
+
+`tools/upload-sdcard.sh` writes the image, then expands partition 3 and its
+ext4 filesystem to fill the remaining SD-card space. The boot and static root
+partitions keep their original sizes. The partition layout is defined in
+[`zybo-z7.wks.in`](src/meta-tgbs/wic/zybo-z7.wks.in), and the boot files in
+[`zybo-z7.conf`](src/meta-tgbs/conf/machine/zybo-z7.conf).
 
 ## Release bundles
 
