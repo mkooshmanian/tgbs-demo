@@ -18,6 +18,47 @@ fragment and described by a matching device-tree overlay.
 
 ## Runtime control
 
+### Shared static root filesystem
+
+The demo image enables `read-only-rootfs` and boots with
+`init=/sbin/tgbs-preinit`. The pre-init supplied by `tgbs-runtime-init` runs
+before the real init, keeps the original image mount read-only at `/rofs`, and
+pivots into an OverlayFS root with a private tmpfs upper and work directory.
+The system staging tmpfs is retained at `/.tgbs-overlay`, outside `/rofs`;
+`/dev`, `/proc`, and `/sys` are moved to the new root before init starts.
+SysV mounts `/run` and `/var/volatile` normally afterwards.
+
+The pre-init adjusts `/etc/fstab` and `/etc/default/rcS` only in the system's
+upper: SysV must treat the new `/` as writable and must not fsck the overlay.
+The original configuration remains unchanged in `/rofs`. A setup failure
+stops boot before the real init; there is no fallback to a writable base.
+The existing SysV `tgbs` script still prepares cgroups and channel storage.
+
+The host and every container use the same static base independently:
+
+```text
+read-only image at /rofs
+├── + system tmpfs upper       → host /
+├── + container A tmpfs upper  → container A /
+└── + container B tmpfs upper  → container B /
+```
+
+Changes made through the host overlay are not inherited by containers. In
+particular, a configuration created or edited on the host after boot is not
+automatically available inside a domain; build shared configuration into the
+image. All uppers are volatile: system changes disappear on reboot, and
+container changes disappear when the domain exits. Persistent storage is not
+configured in this version. Do not remount `/rofs` writable or modify the
+backing image while an overlay is using it.
+
+QEMU's generated boot configuration, the standalone QEMU launcher, and the
+Zybo extlinux configuration select the pre-init and a read-only initial root.
+For another image using `meta-tgbs`, enable `read-only-rootfs`, include the
+runtime package, and supply the same kernel arguments. This pre-init expects
+a directly mounted disk root filesystem, as used by these two targets.
+
+### Domain startup
+
 The image integration mounts a unified cgroup v2 hierarchy and enables the
 `cpu`, `cpuset`, `memory`, and `pids` controllers. `tgbsctl` creates one direct
 child of the cgroup root per managed workload and can configure its temporal
@@ -38,8 +79,9 @@ tgbsctl set worker pids-max max
 
 `run` uses `clone3(CLONE_INTO_CGROUP)` to create the command directly in its
 configured TGBS cgroup and as PID 1 in new PID, mount, UTS, IPC, and cgroup
-namespaces. The host root filesystem is the read-only lower layer of an
-overlayfs whose writable upper layer lives in a private tmpfs. Applications see
+namespaces. The static image at `/rofs` is the lower layer of an overlayfs
+whose writable upper layer lives in a private tmpfs. Startup fails if `/rofs`
+is unavailable or writable. Applications see
 a writable root, but their changes are ephemeral and cannot overwrite regular
 host filesystem paths. Mount propagation is private; `/proc`, `/tmp`, and
 `/run` are private mounts, `/sys` is read-only, and `/dev` keeps the host device

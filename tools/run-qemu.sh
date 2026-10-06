@@ -21,7 +21,7 @@ exec qemu-system-arm \
     -smp 2 \
     -m 1024 \
     -kernel "$BUNDLE_DIR/zImage" \
-    -append 'root=/dev/vda rw console=ttyAMA0,115200 ip=dhcp net.ifnames=0 swiotlb=0' \
+    -append 'root=/dev/vda ro init=/sbin/tgbs-preinit console=ttyAMA0,115200 ip=dhcp net.ifnames=0 swiotlb=0' \
     -drive "id=disk0,file=$BUNDLE_DIR/rootfs.ext4,if=none,format=raw" \
     -device virtio-blk-device,drive=disk0 \
     -netdev user,id=net0,hostfwd=tcp:127.0.0.1:2222-:22,hostfwd=tcp:127.0.0.1:5900-:5900 \

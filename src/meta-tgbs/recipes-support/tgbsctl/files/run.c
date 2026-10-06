@@ -19,6 +19,7 @@
 #include <sys/mount.h>
 #include <sys/prctl.h>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -120,14 +121,26 @@ static int report_mount_error(const char *operation, const char *path)
 
 static int setup_overlay_root(void)
 {
+	struct statvfs lower_stat;
 	static const char stage[] = "/run/.tgbs-root";
 	static const char upper[] = "/run/.tgbs-root/upper";
 	static const char work[] = "/run/.tgbs-root/work";
 	static const char merged[] = "/run/.tgbs-root/merged";
 	static const char old_root[] = "/run/.tgbs-root/merged/.tgbs-old-root";
 	static const char overlay_options[] =
-		"lowerdir=/,upperdir=/run/.tgbs-root/upper,"
+		"lowerdir=" ROOTFS_LOWER ",upperdir=/run/.tgbs-root/upper,"
 		"workdir=/run/.tgbs-root/work";
+
+	/* Fail closed when early init has not provided the immutable shared base.
+	 * Using the live host / as a fallback would reintroduce lower-layer writes. */
+	if (statvfs(ROOTFS_LOWER, &lower_stat) != 0)
+		return report_mount_error("unable to inspect static rootfs at",
+			ROOTFS_LOWER);
+	if (!(lower_stat.f_flag & ST_RDONLY)) {
+		errno = EROFS;
+		return report_mount_error("static rootfs is not read-only at",
+			ROOTFS_LOWER);
+	}
 
 	/* The staging tmpfs contains the private writable layer. It is mounted on
 	 * /run so creating its directories never modifies the host rootfs. */

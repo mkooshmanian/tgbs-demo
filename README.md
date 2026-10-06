@@ -132,6 +132,13 @@ runqemu qemuarm32 slirp nographic
 
 The demo image allows direct root login without a password.
 
+The original rootfs is mounted read-only at `/rofs`. An early init installs
+an OverlayFS root for the system, and `tgbsctl` gives each container a separate
+overlay over that same static image. All writable layers use tmpfs: host
+filesystem changes disappear on reboot and container changes disappear on
+exit. Host changes are not inherited by containers; shared files belong in
+the built image. See [the runtime filesystem layout](src/meta-tgbs/README.md#shared-static-root-filesystem).
+
 ### Running the demonstration
 
 To enter an interactive container and inspect its PID, cgroup and namespaces,

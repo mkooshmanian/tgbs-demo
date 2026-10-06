@@ -24,6 +24,9 @@
 #define RUN_ROOT "/run/tgbs"
 #endif
 
+/* Original image mount retained by tgbs-preinit, never the host overlay. */
+#define ROOTFS_LOWER "/rofs"
+
 #define CPU_LIST_SIZE 4096
 #ifndef CHANNEL_ROOT
 #define CHANNEL_ROOT RUN_ROOT "/channels"

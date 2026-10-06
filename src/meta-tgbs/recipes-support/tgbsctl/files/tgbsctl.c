@@ -64,6 +64,7 @@ void usage(const char *prog)
 		"Commands:\n"
 		"  run      Run COMMAND as PID 1 in isolated PID, mount, UTS, IPC, and\n"
 		"           cgroup namespaces, with an ephemeral overlay rootfs and\n"
+		"           a static read-only base at /rofs,\n"
 		"           private /tmp and /run mounts,\n"
 		"           in a TGBS cgroup named NAME under %s.\n"
 		"           Run options must follow 'run' and precede COMMAND.\n"
