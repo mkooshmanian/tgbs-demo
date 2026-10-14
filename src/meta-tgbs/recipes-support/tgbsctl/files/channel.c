@@ -165,6 +165,11 @@ static int domain_populated(const char *name)
 	FILE *file;
 	struct stat st;
 
+	/* The host is not a container participant, even if an unrelated cgroup
+	 * happens to use its reserved name. Open handles retain lifetime.lock. */
+	if (strcmp(name, SYSTEM_PARTICIPANT) == 0)
+		return 0;
+
 	snprintf(path, sizeof(path), "%s/%s", CG_ROOT, name);
 	if (stat(path, &st) != 0) {
 		if (errno == ENOENT)

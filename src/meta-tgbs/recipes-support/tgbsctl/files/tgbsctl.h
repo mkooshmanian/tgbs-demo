@@ -49,6 +49,9 @@ int rootfs_mount(struct rootfs_plan *plan);
 #define CHANNEL_TOPOLOGY_LOCK RUN_ROOT "/.channel-topology.lock"
 #define CHANNEL_NAME_SIZE TGBS_CONTRACT_NAME_SIZE
 
+/* Host participant in channel contracts; never a managed container domain. */
+#define SYSTEM_PARTICIPANT "system"
+
 /* Derived domain state. Never stored; recomputed from cgroupfs and /proc. */
 enum domain_state {
 	STATE_UNKNOWN = 0,

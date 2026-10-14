@@ -248,6 +248,14 @@ tgbsctl channel inspect command
 tgbsctl channel delete command
 ```
 
+Use `system` as a source or destination to designate the host in either a
+queuing or sampling contract. This name is reserved: `tgbsctl run --name system`
+is rejected. Host programs access `/run/tgbs/channels` directly through
+`libtgbscomm` with the appropriate filesystem permissions. The host participant
+does not require a managed cgroup, and an unrelated cgroup named `system` is
+ignored by channel participant checks. Open host handles still prevent channel
+deletion through `lifetime.lock`.
+
 Channels must be created before their participating domains are started. Each
 creation gets a unique generation, so deleting and recreating the same name
 still produces a distinct channel instance. The queuing runtime layout is:

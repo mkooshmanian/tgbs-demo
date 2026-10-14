@@ -459,6 +459,8 @@ int cmd_run(int argc, char **argv)
 
 	if (strcmp(name, "channels") == 0 || strcmp(name, "rootfs") == 0)
 		error_exit("the domain name '%s' is reserved by the runtime", name);
+	if (strcmp(name, SYSTEM_PARTICIPANT) == 0)
+		error_exit("the domain name '%s' is reserved for the host", name);
 
 	verify_cgroup_env();
 	if (rootfs_plan_prepare(name, ephemeral, &rootfs) != 0)
