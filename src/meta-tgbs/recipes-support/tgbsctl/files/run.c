@@ -36,7 +36,7 @@ static void signal_handler(int sig)
 	g_signal = sig;
 }
 
-static int drop_cap_sys_admin(void)
+int drop_cap_sys_admin(void)
 {
 	struct __user_cap_header_struct header = {
 		.version = _LINUX_CAPABILITY_VERSION_3,

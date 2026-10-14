@@ -302,7 +302,7 @@ static int format_bytes(const char *text, char *out, size_t outsz)
 	return len >= 0 && (size_t)len < outsz ? 0 : -1;
 }
 
-static int read_main_meta(const char *name, pid_t *pid,
+int read_main_meta(const char *name, pid_t *pid,
 		unsigned long long *starttime)
 {
 	char path[PATH_MAX];

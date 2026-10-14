@@ -169,7 +169,22 @@ tgbsctl set worker cpus inherit
 tgbsctl set worker reclaim true
 tgbsctl set worker memory-max 536870912
 tgbsctl set worker pids-max max
+
+tgbsctl attach worker
 ```
+
+`attach NAME` opens a new `/bin/sh` in a running domain using the calling
+terminal or standard input/output. The shell joins the domain's PID, mount,
+UTS, IPC, and cgroup namespaces and enters its existing root filesystem. It is
+created directly in the same TGBS cgroup, sharing the temporal budget, CPU
+placement, memory limit, and PID limit with the workload. As with `run`,
+`CAP_SYS_ADMIN` is removed and `no_new_privs` is enabled before executing the
+shell. Run this command as root on the host.
+
+Use `exit` or Ctrl-D to leave the attached shell; the main process keeps
+running. The command returns the shell's exit status. A paused domain must be
+resumed before attaching. If the main process exits, the existing supervisor
+cleans up the domain, including attached shells.
 
 `run` uses `clone3(CLONE_INTO_CGROUP)` to create the command directly in its
 configured TGBS cgroup and as PID 1 in new PID, mount, UTS, IPC, and cgroup

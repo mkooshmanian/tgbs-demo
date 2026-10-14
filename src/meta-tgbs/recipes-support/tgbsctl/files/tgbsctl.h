@@ -123,12 +123,16 @@ int read_starttime(pid_t pid, unsigned long long *out);
 /* --- command dispatch --- */
 
 int cmd_run(int argc, char **argv);
+int cmd_attach(const char *name);
 int cmd_list(void);
 int cmd_inspect(const char *name);
 int cmd_kill(const char *name);
 int cmd_freeze(const char *name, int freeze);
 int cmd_set(const char *name, const char *field, const char *value_text);
 int cmd_channel(int argc, char **argv);
+
+/* Shared privilege reduction for run and attach, defined in run.c. */
+int drop_cap_sys_admin(void);
 
 /* --- channel topology helpers defined in channel.c --- */
 
@@ -145,6 +149,9 @@ int channel_mount_plan_prepare(const char *domain,
 void channel_mount_plan_close(struct channel_mount_plan *plan);
 
 /* --- observe helpers defined in observe.c (read-only) --- */
+
+int read_main_meta(const char *name, pid_t *pid,
+	unsigned long long *starttime);
 
 const char *state_name(enum domain_state s);
 

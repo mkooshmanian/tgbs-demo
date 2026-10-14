@@ -44,6 +44,7 @@ void usage(const char *prog)
 		"         [--memory-max BYTES|max] [--pids-max COUNT|max]\n"
 		"         [--ephemeral]\n"
 		"         COMMAND [ARGS...]\n"
+		"  %s attach NAME\n"
 		"  %s list\n"
 		"  %s inspect NAME\n"
 		"  %s kill NAME\n"
@@ -79,6 +80,8 @@ void usage(const char *prog)
 		"           HOSTNAME is set in the private UTS namespace before privileges\n"
 		"           are reduced. CAP_SYS_ADMIN is unavailable to COMMAND.\n"
 		"  list     List the TGBS domains known to this runtime.\n"
+		"  attach   Open /bin/sh in NAME's namespaces, rootfs, and TGBS cgroup.\n"
+		"           Exiting this shell leaves the main process running.\n"
 		"  inspect  Show the state, temporal contract, and processes for NAME.\n"
 		"  kill     Kill every process in NAME. The run supervisor then cleans up.\n"
 		"  pause    Freeze every process in NAME.\n"
@@ -90,7 +93,7 @@ void usage(const char *prog)
 		"           Sampling requires REFRESH_PERIOD in microseconds and allows\n"
 		"           up to 64 distinct destinations.\n",
 		prog, prog, prog, prog, prog, prog, prog, prog, prog, prog,
-		prog, prog, prog, prog, prog, prog, CG_ROOT);
+		prog, prog, prog, prog, prog, prog, prog, CG_ROOT);
 }
 
 int is_valid_name(const char *name)
@@ -527,6 +530,14 @@ int main(int argc, char **argv)
 
 	if (strcmp(argv[1], "run") == 0)
 		return cmd_run(argc, argv);
+	if (strcmp(argv[1], "attach") == 0) {
+		if (argc != 3) {
+			fprintf(stderr, "tgbsctl: ERROR - attach requires exactly one NAME\n");
+			usage(argv[0]);
+			return 2;
+		}
+		return cmd_attach(argv[2]);
+	}
 	if (strcmp(argv[1], "list") == 0)
 		return cmd_list();
 	if (strcmp(argv[1], "inspect") == 0) {
