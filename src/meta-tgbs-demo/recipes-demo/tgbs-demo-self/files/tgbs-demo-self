@@ -4,6 +4,8 @@ set -eu
 
 DOMAIN="self"
 ENTRYPOINT="/usr/libexec/tgbs-demo/self-entrypoint"
+SHARED_HOST="/home/root/shared"
+SHARED_CONTAINER="/mnt/shared"
 
 RUNTIME_US=50000
 PERIOD_US=100000
@@ -19,6 +21,8 @@ With no arguments, runs 'start'.
 
 Open an interactive shell inside the '${DOMAIN}' TGBS domain.
 Leave the container and remove its domain with 'exit' or Ctrl-D.
+The host's ${SHARED_HOST} is shared at ${SHARED_CONTAINER} in the container.
+Files remain available on the host after the container exits.
 
 TGBS contract:
   runtime:  ${RUNTIME_US} us
@@ -38,13 +42,16 @@ case "${1:-}" in
             exit 1
         }
 
+        mkdir -p "${SHARED_HOST}"
         echo "Entering the '${DOMAIN}' TGBS container."
+        echo "Shared directory: ${SHARED_HOST} (host) -> ${SHARED_CONTAINER} (container)."
         exec tgbsctl run \
             --name "${DOMAIN}" \
             --hostname tgbs-self \
             --runtime-us "${RUNTIME_US}" \
             --period-us "${PERIOD_US}" \
             --cpus "${CPUS}" \
+            --bind "${SHARED_HOST}:${SHARED_CONTAINER}" \
             "${ENTRYPOINT}"
         ;;
 

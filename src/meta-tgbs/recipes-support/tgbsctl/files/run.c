@@ -28,7 +28,8 @@ static volatile sig_atomic_t g_signal = 0;
 enum run_option {
 	OPT_MEMORY_MAX = 256,
 	OPT_PIDS_MAX,
-	OPT_EPHEMERAL
+	OPT_EPHEMERAL,
+	OPT_BIND
 };
 
 static void signal_handler(int sig)
@@ -202,7 +203,7 @@ static int setup_channel_mounts(const struct channel_mount_plan *plan)
 }
 
 static int setup_container_mounts(const struct channel_mount_plan *plan,
-	struct rootfs_plan *rootfs)
+	struct rootfs_plan *rootfs, const struct bind_mount_plan *binds)
 {
 	/* Keep mounts created by the container from propagating to the host. */
 	if (mount(NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL) != 0)
@@ -245,7 +246,7 @@ static int setup_container_mounts(const struct channel_mount_plan *plan,
 	if (mount("proc", "/proc", "proc",
 			MS_NOSUID | MS_NOEXEC | MS_NODEV, NULL) != 0)
 		return report_mount_error("unable to mount private procfs at", "/proc");
-	return 0;
+	return bind_mount_plan_mount(binds);
 }
 
 static pid_t clone_container_into_cgroup(int cgroup_fd)
@@ -358,6 +359,7 @@ int cmd_run(int argc, char **argv)
 	int topology_fd = -1;
 	int cgroup_fd = -1;
 	struct channel_mount_plan channel_mounts = {0};
+	struct bind_mount_plan binds = {0};
 	struct rootfs_plan rootfs;
 
 	/* The 'run' subcommand is argv[1]; options follow it. Start getopt at
@@ -379,6 +381,7 @@ int cmd_run(int argc, char **argv)
 		{"memory-max", required_argument, NULL, OPT_MEMORY_MAX},
 		{"pids-max", required_argument, NULL, OPT_PIDS_MAX},
 		{"ephemeral", no_argument, NULL, OPT_EPHEMERAL},
+		{"bind", required_argument, NULL, OPT_BIND},
 		{"help", no_argument, NULL, 'h'},
 		{0, 0, 0, 0},
 	};
@@ -423,6 +426,13 @@ int cmd_run(int argc, char **argv)
 		case OPT_EPHEMERAL:
 			ephemeral = 1;
 			break;
+		case OPT_BIND:
+			if (bind_mount_plan_add(&binds, optarg) != 0) {
+				fprintf(stderr, "tgbsctl: ERROR - invalid --bind '%s': use absolute SOURCE:DESTINATION[:ro|rw], a unique destination outside /dev, /proc, /sys and /run, and no '.' or '..' destination components\n", optarg);
+				bind_mount_plan_close(&binds);
+				return 2;
+			}
+			break;
 		default:
 			usage(argv[0]);
 			return 2;
@@ -463,6 +473,10 @@ int cmd_run(int argc, char **argv)
 		error_exit("the domain name '%s' is reserved for the host", name);
 
 	verify_cgroup_env();
+	if (bind_mount_plan_prepare(&binds) != 0) {
+		bind_mount_plan_close(&binds);
+		return 1;
+	}
 	if (rootfs_plan_prepare(name, ephemeral, &rootfs) != 0)
 		error_exit("unable to prepare %s rootfs for %s: %s",
 			ephemeral ? "ephemeral" : "persistent", name, strerror(errno));
@@ -590,6 +604,7 @@ int cmd_run(int argc, char **argv)
 
 		close(cgroup_fd);
 		channel_mount_plan_close(&channel_mounts);
+		bind_mount_plan_close(&binds);
 		rootfs_plan_close(&rootfs);
 		cleanup_run(name);
 		errno = saved_errno;
@@ -601,9 +616,10 @@ int cmd_run(int argc, char **argv)
 		int setup_errno;
 
 		close(cgroup_fd);
-		if (setup_container_mounts(&channel_mounts, &rootfs) != 0) {
+		if (setup_container_mounts(&channel_mounts, &rootfs, &binds) != 0) {
 			setup_errno = errno;
 			channel_mount_plan_close(&channel_mounts);
+			bind_mount_plan_close(&binds);
 			rootfs_plan_close(&rootfs);
 			channel_topology_unlock(topology_fd);
 			fprintf(stderr,
@@ -612,6 +628,7 @@ int cmd_run(int argc, char **argv)
 			_exit(127);
 		}
 		channel_mount_plan_close(&channel_mounts);
+		bind_mount_plan_close(&binds);
 		rootfs_plan_close(&rootfs);
 		channel_topology_unlock(topology_fd);
 		if (hostname != NULL && sethostname(hostname, strlen(hostname)) != 0) {
@@ -632,6 +649,7 @@ int cmd_run(int argc, char **argv)
 	}
 
 	close(cgroup_fd);
+	bind_mount_plan_close(&binds);
 	/* The supervisor holds the exclusive storage lock through domain cleanup. */
 	rootfs_plan_close_layers(&rootfs);
 	channel_mount_plan_close(&channel_mounts);

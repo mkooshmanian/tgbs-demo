@@ -41,6 +41,23 @@ void rootfs_plan_close_layers(struct rootfs_plan *plan);
 void rootfs_plan_close(struct rootfs_plan *plan);
 int rootfs_mount(struct rootfs_plan *plan);
 
+struct bind_mount_entry {
+	char *source;
+	char *destination;
+	int read_only;
+	int mount_fd;
+};
+
+struct bind_mount_plan {
+	struct bind_mount_entry *entries;
+	size_t count;
+};
+
+int bind_mount_plan_add(struct bind_mount_plan *plan, const char *spec);
+int bind_mount_plan_prepare(struct bind_mount_plan *plan);
+int bind_mount_plan_mount(const struct bind_mount_plan *plan);
+void bind_mount_plan_close(struct bind_mount_plan *plan);
+
 #define CPU_LIST_SIZE 4096
 #ifndef CHANNEL_ROOT
 #define CHANNEL_ROOT RUN_ROOT "/channels"

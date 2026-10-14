@@ -173,6 +173,8 @@ dedicated ext4 data partition, mounted at `/var/lib/tgbs`, containing all
 persistent uppers. Host and container changes survive reboot and domain exit;
 host changes are not inherited by containers. `/run`, `/tmp` and `/var/volatile`
 remain volatile. `tgbsctl run --ephemeral` selects a private tmpfs upper.
+`tgbsctl run --bind SOURCE:DESTINATION[:ro|rw]` explicitly shares host directories
+with a container, independently of its overlay.
 See [the runtime filesystem layout](src/meta-tgbs/README.md#shared-static-root-filesystem).
 
 Persistent uppers are associated with the built base through
@@ -196,6 +198,9 @@ tgbs-demo-self
 
 The shell remains attached to the current terminal. Type `exit` or press
 Ctrl-D to leave it and remove the `self` domain.
+The host directory `/home/root/shared` is shared at `/mnt/shared` in the
+container. You can create or edit shared files manually; they remain available
+on the host after exit.
 
 After booting the target, start the example domains from a control shell.
 The commands launch their domains in the background:

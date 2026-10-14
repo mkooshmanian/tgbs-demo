@@ -31,6 +31,12 @@ tgbs-demo-self
 The shell displays its cgroup and namespace identifiers on entry. Type `exit`
 or press Ctrl-D to leave it; `tgbsctl` then removes the domain.
 
+The demo shares the host directory `/home/root/shared` at `/mnt/shared`
+inside the container using `run --bind`. The shell starts in its home directory
+(`/home/root` by default). Use `cd /mnt/shared` to create or edit shared files
+manually. The shared directory and its files are retained after the domain is
+removed.
+
 ## Communication channels
 
 `tgbs-demo-comm` creates three domains, two queuing channels and one sampling

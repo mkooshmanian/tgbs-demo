@@ -12,6 +12,8 @@ for namespace in pid mnt uts ipc; do
     printf '    %-3s %s\n' "${namespace}" "$(readlink "/proc/self/ns/${namespace}")"
 done
 echo
+echo "Shared directory: /mnt/shared (host: /home/root/shared)"
+echo
 echo "Type 'exit' or press Ctrl-D to leave the container."
 echo
 
