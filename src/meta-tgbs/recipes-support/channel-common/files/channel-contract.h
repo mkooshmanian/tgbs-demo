@@ -9,6 +9,10 @@
 #define TGBS_CONTRACT_DOMAIN_SIZE 256
 #define TGBS_CONTRACT_MAX_DESTINATIONS 64
 
+/* Canonical host participant and its accepted alias; reserved domain names. */
+#define HOST_PARTICIPANT "host"
+#define SYSTEM_PARTICIPANT_ALIAS "system"
+
 enum tgbs_contract_type {
 	TGBS_CONTRACT_QUEUING = 1,
 	TGBS_CONTRACT_SAMPLING
@@ -29,6 +33,8 @@ const char *tgbs_contract_type_name(enum tgbs_contract_type type);
 int tgbs_contract_parse_type(const char *text, enum tgbs_contract_type *type);
 int tgbs_contract_parse_positive(const char *text, unsigned long long *out);
 int tgbs_contract_valid_name(const char *name, size_t capacity);
+/* Map the system alias to HOST_PARTICIPANT; preserve other names and NULL. */
+const char *tgbs_contract_canonical_domain(const char *domain);
 int tgbs_contract_add_destination(struct tgbs_channel_contract *contract,
 	const char *domain);
 int tgbs_contract_has_destination(const struct tgbs_channel_contract *contract,

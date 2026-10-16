@@ -93,7 +93,7 @@ void usage(const char *prog)
 		"  resume   Unfreeze every process in NAME.\n"
 		"  set      Change one value of NAME's temporal contract.\n"
 		"  channel  Manage immutable channel contracts between containers or the host.\n"
-		"           system denotes the host and is reserved as a container name.\n"
+		"           host (alias system) denotes the host; both are reserved container names.\n"
 		"           TYPE is required: queuing or sampling.\n"
 		"           Queuing requires exactly one destination.\n"
 		"           Sampling requires REFRESH_PERIOD in microseconds and allows\n"

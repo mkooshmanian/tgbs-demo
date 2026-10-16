@@ -167,7 +167,7 @@ static int domain_populated(const char *name)
 
 	/* The host is not a container participant, even if an unrelated cgroup
 	 * happens to use its reserved name. Open handles retain lifetime.lock. */
-	if (strcmp(name, SYSTEM_PARTICIPANT) == 0)
+	if (strcmp(tgbs_contract_canonical_domain(name), HOST_PARTICIPANT) == 0)
 		return 0;
 
 	snprintf(path, sizeof(path), "%s/%s", CG_ROOT, name);
@@ -407,7 +407,7 @@ static int create_channel(int argc, char **argv)
 			name = optarg;
 			break;
 		case 's':
-			source = optarg;
+			source = tgbs_contract_canonical_domain(optarg);
 			break;
 		case 'd':
 			if (tgbs_contract_add_destination(&contract, optarg) != 0) {

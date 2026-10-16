@@ -67,13 +67,23 @@ int tgbs_contract_valid_name(const char *name, size_t capacity)
 	return 1;
 }
 
+const char *tgbs_contract_canonical_domain(const char *domain)
+{
+	if (domain != NULL && strcmp(domain, SYSTEM_PARTICIPANT_ALIAS) == 0)
+		return HOST_PARTICIPANT;
+	return domain;
+}
+
 int tgbs_contract_has_destination(const struct tgbs_channel_contract *contract,
 	const char *domain)
 {
 	size_t i;
 
+	domain = tgbs_contract_canonical_domain(domain);
+	if (domain == NULL)
+		return 0;
 	for (i = 0; i < contract->destination_count; i++)
-		if (strcmp(contract->destinations[i], domain) == 0)
+		if (strcmp(tgbs_contract_canonical_domain(contract->destinations[i]), domain) == 0)
 			return 1;
 	return 0;
 }
@@ -81,6 +91,7 @@ int tgbs_contract_has_destination(const struct tgbs_channel_contract *contract,
 int tgbs_contract_add_destination(struct tgbs_channel_contract *contract,
 	const char *domain)
 {
+	domain = tgbs_contract_canonical_domain(domain);
 	if (!tgbs_contract_valid_name(domain, TGBS_CONTRACT_DOMAIN_SIZE) ||
 	    strcmp(domain, "channels") == 0 ||
 	    contract->destination_count >= TGBS_CONTRACT_MAX_DESTINATIONS ||
@@ -111,7 +122,8 @@ int tgbs_contract_validate(const struct tgbs_channel_contract *contract)
 		    strcmp(contract->destinations[i], "channels") == 0)
 			goto invalid;
 		for (j = 0; j < i; j++)
-			if (strcmp(contract->destinations[i], contract->destinations[j]) == 0)
+			if (strcmp(tgbs_contract_canonical_domain(contract->destinations[i]),
+				   tgbs_contract_canonical_domain(contract->destinations[j])) == 0)
 				goto invalid;
 	}
 	if (contract->type == TGBS_CONTRACT_QUEUING) {
@@ -193,7 +205,8 @@ int tgbs_contract_read(const char *root, const char *name,
 				goto invalid;
 			seen |= 4U;
 		} else if (strcmp(key, "source") == 0 && !(seen & 8U)) {
-			if (copy_value(contract->source, sizeof(contract->source), value) != 0)
+			if (copy_value(contract->source, sizeof(contract->source),
+				       tgbs_contract_canonical_domain(value)) != 0)
 				goto invalid;
 			seen |= 8U;
 		} else if (strcmp(key, "destination") == 0) {
