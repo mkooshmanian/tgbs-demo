@@ -173,6 +173,40 @@ tgbsctl set worker pids-max max
 tgbsctl attach worker
 ```
 
+`list` separates the default runtime (`DEFAULT_US`) from the runtime of the
+effective CPUs (`RUNTIME_US`). Uniform effective runtimes appear as one value;
+different runtimes appear as `0=40000,1=20000`. `inspect` labels the default
+runtime and default budget explicitly and lists the resolved runtime
+and budget for every possible CPU, including CPUs which are offline or outside
+the domain's cpuset. CPUs without an override inherit the default runtime.
+The total budget sums the runtimes of the effective CPUs, applying overrides
+only to CPUs in `cpuset.cpus.effective`. The legacy scalar format is also
+accepted. `run --runtime-us` continues to take one default runtime.
+
+For example, with a 100000 us period, default runtime 65000 us, CPU 0 runtime
+40000 us and CPU 1 runtime 20000 us, the total budget is 20% if only CPU 1 is
+effective. Enabling both CPUs makes it 60%. The default's 65% is used only on
+CPUs without an override. Disabled CPUs retain their configured runtime but
+do not contribute to the total budget in `inspect`, `list`, or `tgbs-top`.
+
+`set NAME runtime-us VALUE_US` updates the default runtime, preserving existing
+per-CPU overrides. A comma-separated list instead sets every possible CPU's
+runtime in ascending CPU ID order, preserving the default. Its length must
+match `/sys/devices/system/cpu/possible`, including offline CPUs and CPUs
+excluded from the domain's cpuset. Each value must be between zero and the
+current period. `runtime` remains an alias for `runtime-us`.
+
+```sh
+tgbsctl set worker runtime-us 20000
+# On a two-CPU machine: CPU 0 gets 10000 us, CPU 1 gets 30000 us.
+tgbsctl set worker runtime-us 10000,30000
+tgbsctl inspect worker
+```
+
+Lists are validated before writing. If the kernel rejects an update, `tgbsctl`
+attempts to restore the previous per-CPU configuration and reports any restore
+failure. Updates use separate kernel writes for each CPU.
+
 `attach NAME` opens a new `/bin/sh` in a running domain using the calling
 terminal or standard input/output. The shell joins the domain's PID, mount,
 UTS, IPC, and cgroup namespaces and enters its existing root filesystem. It is
@@ -479,8 +513,9 @@ tgbs-top
 ```
 
 The first section shows every logical CPU and aggregates busy time into TGBS,
-other, and idle shares. Domain rows show the configured per-CPU reservation
-(`cpu.runtime_us / cpu.period_us`) and a `USE/BUDGET` bar. That bar compares
+other, and idle shares. Domain rows show `TOTAL_BUDGET`, the reservation summed across
+the effective CPUs, using each CPU's runtime override or the default, and a
+`USE/BUDGET` bar. That bar compares
 measured CPU consumption with the total reservation across the effective CPU
 set; a full bar means that the domain consumed its complete reserved capacity
 during the latest sample. Task rows show the scheduling policy, priority,

@@ -3,9 +3,9 @@ DESCRIPTION = "tgbsctl manages TGBS cgroups and immutable communication channels
 LICENSE = "MIT"
 LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda2f7b4f302"
 
-FILESEXTRAPATHS:prepend := "${THISDIR}/../channel-common/files:"
+FILESEXTRAPATHS:prepend := "${THISDIR}/../channel-common/files:${THISDIR}/../runtime-common/files:"
 
-SRC_URI = "file://tgbsctl.c file://tgbsctl.h file://run.c file://attach.c file://rootfs.c file://bind.c file://observe.c file://control.c file://channel.c file://channel-contract.c file://channel-contract.h file://queuing-format.h file://sampling-format.h"
+SRC_URI = "file://tgbsctl.c file://tgbsctl.h file://run.c file://attach.c file://rootfs.c file://bind.c file://observe.c file://control.c file://channel.c file://channel-contract.c file://channel-contract.h file://queuing-format.h file://sampling-format.h file://cpu-runtime.c file://cpu-runtime.h"
 
 S = "${WORKDIR}"
 
@@ -14,7 +14,7 @@ RDEPENDS:${PN} += "tgbs-runtime-init"
 CFLAGS:append = " -Wall -Wextra"
 
 do_compile() {
-	${CC} ${CFLAGS} ${LDFLAGS} tgbsctl.c run.c attach.c rootfs.c bind.c observe.c control.c channel.c channel-contract.c -o tgbsctl
+	${CC} ${CFLAGS} ${LDFLAGS} tgbsctl.c run.c attach.c rootfs.c bind.c observe.c control.c channel.c channel-contract.c cpu-runtime.c -o tgbsctl
 }
 
 do_install() {

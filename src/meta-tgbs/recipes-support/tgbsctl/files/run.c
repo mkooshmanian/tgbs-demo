@@ -565,12 +565,15 @@ int cmd_run(int argc, char **argv)
 		error_exit("unable to verify cpu.period_us on %s", cfg_path);
 	}
 	snprintf(cfg_path, sizeof(cfg_path), "%s/cpu.runtime_us", name_path);
-	if (read_u64(cfg_path, &runtime_us) != 0) {
+	struct runtime_config runtime;
+	if (read_runtime(cfg_path, &runtime) != 0) {
 		int saved_errno = errno;
 		cleanup_run(name);
 		errno = saved_errno;
 		error_exit("unable to verify cpu.runtime_us on %s", cfg_path);
 	}
+	runtime_us = runtime.default_runtime;
+	free_runtime(&runtime);
 
 	if (reclaim_set && configure_domain_reclaim(name, reclaim) != 0) {
 		int saved_errno = errno;

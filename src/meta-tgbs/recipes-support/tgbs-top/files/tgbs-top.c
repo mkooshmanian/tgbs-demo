@@ -29,6 +29,8 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "cpu-runtime.h"
+
 #ifndef PATH_MAX
 #define PATH_MAX 4096
 #endif
@@ -76,12 +78,11 @@ struct domain_sample {
 	char state[16];
 	char cpus[CPU_LIST_SIZE];
 	unsigned long long usage_usec;
-	unsigned long long runtime_usec;
 	unsigned long long period_usec;
-	unsigned int cpu_count;
 	unsigned int task_count;
 	double cpu_percent;
 	double budget_percent;
+	bool budget_valid;
 };
 
 struct snapshot {
@@ -457,6 +458,10 @@ static void read_domain(struct snapshot *snapshot, const char *name)
 	struct domain_sample *domain;
 	char path[PATH_MAX];
 	struct stat status;
+	struct runtime_config runtime;
+	struct cpu_list effective;
+	int runtime_status;
+	int period_status;
 
 	if (snapshot->domain_count >= MAX_DOMAINS || !valid_domain_name(name))
 		return;
@@ -470,16 +475,20 @@ static void read_domain(struct snapshot *snapshot, const char *name)
 	path_printf(path, sizeof(path), "%s/%s/cpu.stat", cgroup_root, name);
 	read_keyed_u64(path, "usage_usec", &domain->usage_usec);
 	path_printf(path, sizeof(path), "%s/%s/cpu.runtime_us", cgroup_root, name);
-	read_u64(path, &domain->runtime_usec);
+	runtime_status = read_runtime(path, &runtime);
 	path_printf(path, sizeof(path), "%s/%s/cpu.period_us", cgroup_root, name);
-	read_u64(path, &domain->period_usec);
+	period_status = read_u64(path, &domain->period_usec);
 	path_printf(path, sizeof(path), "%s/%s/cpuset.cpus.effective", cgroup_root, name);
 	if (read_text(path, domain->cpus, sizeof(domain->cpus)) != 0)
 		strcpy(domain->cpus, "-");
-	domain->cpu_count = count_cpu_list(domain->cpus);
-	if (domain->period_usec != 0)
-		domain->budget_percent = 100.0 * (double)domain->runtime_usec /
-			(double)domain->period_usec;
+	if (runtime_status == 0 && period_status == 0 && domain->period_usec != 0 &&
+	    parse_cpu_list(domain->cpus, &effective) == 0) {
+		domain->budget_percent = (double)(100.0L * total_runtime(&runtime,
+			&effective) / domain->period_usec);
+		domain->budget_valid = true;
+		free_cpu_list(&effective);
+	}
+	free_runtime(&runtime);
 	path_printf(path, sizeof(path), "%s/%s/cgroup.events", cgroup_root, name);
 	read_domain_state(path, domain->state, sizeof(domain->state));
 	path_printf(path, sizeof(path), "%s/%s/cgroup.threads", cgroup_root, name);
@@ -754,10 +763,10 @@ static void render(const struct snapshot *current, const struct snapshot *previo
 		printed_rows++;
 	}
 
-	printf("\n%sTGBS DOMAINS%s  %sUSE: 100%% = one CPU; USE/BUDGET: actual / reserved%s\n",
+	printf("\n%sTGBS DOMAINS%s  %sUSE: 100%% = one CPU; budget: effective CPUs only%s\n",
 		color(C_BOLD), color(C_RESET), color(C_DIM), color(C_RESET));
-	printf(" %-18s %-8s %7s %10s  %-*s %8s %8s\n",
-		"DOMAIN", "STATE", "USE", "BUDGET",
+	printf(" %-18s %-8s %7s %12s  %-*s %8s %8s\n",
+		"DOMAIN", "STATE", "USE", "TOTAL_BUDGET",
 		(int)bar_width + 2, "USE/BUDGET", "CPUS", "NB TASKS");
 	printed_rows += 3;
 	if (current->domain_count == 0) {
@@ -769,13 +778,18 @@ static void render(const struct snapshot *current, const struct snapshot *previo
 		const struct domain_sample *domain = &current->domains[i];
 		const char *state_color = strcmp(domain->state, "running") == 0 ? C_GREEN :
 			strcmp(domain->state, "paused") == 0 ? C_YELLOW : C_DIM;
-		double total_budget = domain->budget_percent * domain->cpu_count;
+		double total_budget = domain->budget_percent;
 		double budget_use = total_budget > 0.0 ?
 			100.0 * domain->cpu_percent / total_budget : 0.0;
-		printf(" %-18.18s %s%-8s%s %6.1f%% %9.1f%%  ", domain->name,
+		printf(" %-18.18s %s%-8s%s %6.1f%% ", domain->name,
 			color(state_color), domain->state, color(C_RESET),
-			domain->cpu_percent, domain->budget_percent);
-		print_bar(budget_use, bar_width, load_color(budget_use));
+			domain->cpu_percent);
+		if (domain->budget_valid) {
+			printf("%11.1f%%  ", domain->budget_percent);
+			print_bar(budget_use, bar_width, load_color(budget_use));
+		} else {
+			printf("%12s  %-*s", "-", (int)bar_width + 2, "(unavailable)");
+		}
 		printf(" %8.8s %8u\n", domain->cpus, domain->task_count);
 		printed_rows++;
 	}
@@ -866,7 +880,8 @@ static void usage(FILE *stream, const char *program)
 		"  -h, --help            show this help\n"
 		"\n"
 		"In interactive mode, press q to quit. CPU%% follows top semantics: 100%%\n"
-		"means one fully occupied logical CPU. BUDGET/CPU is runtime / period.\n",
+		"means one fully occupied logical CPU. TOTAL_BUDGET sums runtime / period\n"
+		"over the domain's effective CPUs, including per-CPU overrides.\n",
 		program);
 }
 

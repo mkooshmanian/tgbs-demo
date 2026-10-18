@@ -15,6 +15,7 @@
 #include <stddef.h>
 #include <sys/types.h>
 #include "channel-contract.h"
+#include "cpu-runtime.h"
 
 #ifndef CG_ROOT
 #define CG_ROOT "/sys/fs/cgroup"

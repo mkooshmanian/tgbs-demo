@@ -4,7 +4,9 @@ DESCRIPTION = "A small top-like monitor focused on tgbsctl-managed cgroups, thei
 LICENSE = "MIT"
 LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda2f7b4f302"
 
-SRC_URI = "file://tgbs-top.c"
+FILESEXTRAPATHS:prepend := "${THISDIR}/../runtime-common/files:"
+
+SRC_URI = "file://tgbs-top.c file://cpu-runtime.c file://cpu-runtime.h"
 
 S = "${WORKDIR}"
 
@@ -13,7 +15,7 @@ RDEPENDS:${PN} += "tgbsctl"
 CFLAGS += "-Wall -Wextra"
 
 do_compile() {
-    ${CC} ${CFLAGS} ${LDFLAGS} -o ${B}/tgbs-top ${WORKDIR}/tgbs-top.c
+    ${CC} ${CFLAGS} ${LDFLAGS} -o ${B}/tgbs-top ${WORKDIR}/tgbs-top.c ${WORKDIR}/cpu-runtime.c
 }
 
 do_install() {

@@ -51,7 +51,7 @@ void usage(const char *prog)
 		"  %s kill NAME\n"
 		"  %s pause NAME\n"
 		"  %s resume NAME\n"
-		"  %s set NAME runtime VALUE_US\n"
+		"  %s set NAME runtime-us VALUE_US[,VALUE_US...]\n"
 		"  %s set NAME period VALUE_US\n"
 		"  %s set NAME cpus CPU-LIST|inherit\n"
 		"  %s set NAME reclaim 0|1|false|true\n"
@@ -92,6 +92,9 @@ void usage(const char *prog)
 		"  pause    Freeze every process in NAME.\n"
 		"  resume   Unfreeze every process in NAME.\n"
 		"  set      Change one value of NAME's temporal contract.\n"
+		"           runtime-us (alias runtime) accepts a default value or a comma-separated\n"
+		"           list with one nonnegative value per possible CPU, in CPU ID order,\n"
+		"           including offline CPUs. Lists preserve the default runtime.\n"
 		"  channel  Manage immutable channel contracts between containers or the host.\n"
 		"           host (alias system) denotes the host; both are reserved container names.\n"
 		"           TYPE is required: queuing or sampling.\n"
@@ -573,7 +576,7 @@ int main(int argc, char **argv)
 	if (strcmp(argv[1], "set") == 0) {
 		if (argc != 5) {
 			fprintf(stderr,
-				"tgbsctl: ERROR - set requires NAME, runtime|period|cpus|reclaim, and VALUE\n");
+				"tgbsctl: ERROR - set requires NAME, runtime-us|runtime|period|cpus|reclaim|memory-max|pids-max, and VALUE\n");
 			usage(argv[0]);
 			return 2;
 		}
