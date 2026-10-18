@@ -153,6 +153,12 @@ and discards its changes at exit without resetting the persistent upper.
 
 ### Domain startup
 
+The kernel enables `CONFIG_ROOT_TG_BANDWIDTH_SERVER`. During early init, the
+root server is configured with a 100 ms period (`cpu.period_us=100000`) and
+reclaim enabled (`cpu.reclaim=1`). Its per-CPU runtime is calculated by the
+kernel from the bandwidth remaining after child reservations. Init checks both
+settings before reporting that the runtime is ready.
+
 The image integration mounts a unified cgroup v2 hierarchy and enables the
 `cpu`, `cpuset`, `memory`, and `pids` controllers. `tgbsctl` creates one direct
 child of the cgroup root per managed workload and can configure its temporal

@@ -69,6 +69,10 @@ do_configure:append() {
         bbfatal "TGBS could not be enabled; check the dependencies in tgbs.cfg"
     fi
 
+    if ! grep -q '^CONFIG_ROOT_TG_BANDWIDTH_SERVER=y$' ${B}/.config; then
+        bbfatal "The root TGBS server could not be enabled; check the dependencies in tgbs.cfg"
+    fi
+
     if ${@bb.utils.contains('DISTRO_FEATURES', 'preempt-rt', 'true', 'false', d)} \
        && ! grep -q '^CONFIG_PREEMPT_RT=y$' ${B}/.config; then
         bbfatal "PREEMPT_RT could not be enabled; check preempt-rt.cfg and the RT patch"

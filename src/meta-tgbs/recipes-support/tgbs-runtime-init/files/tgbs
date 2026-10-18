@@ -12,8 +12,8 @@
 # Short-Description: Mount cgroup v2 and enable TGBS resource controllers.
 # Description:       Prepare the cgroup v2 hierarchy at /sys/fs/cgroup so that
 #                    TGBS can create and place task groups under the root, and
-#                    initialize the volatile communication-channel store. Does
-#                    not create any subgroup or modify a temporal contract.
+#                    configure the root server and initialize the volatile
+#                    communication-channel store. Does not create any subgroup.
 ### END INIT INFO
 
 CG_ROOT=/sys/fs/cgroup
@@ -87,5 +87,27 @@ for controller in cpu cpuset memory pids; do
 	fi
 done
 
+# The root server's runtime is derived by the kernel from the bandwidth left
+# by child groups. Set its period and enable reclaim before workloads start.
+for setting in cpu.period_us=100000 cpu.reclaim=1; do
+	control=${setting%%=*}
+	value=${setting#*=}
+	path=$CG_ROOT/$control
+
+	if [ ! -f "$path" ]; then
+		echo "tgbs: ERROR - $path is missing; CONFIG_ROOT_TG_BANDWIDTH_SERVER is required" >&2
+		exit 1
+	fi
+	if ! echo "$value" > "$path"; then
+		echo "tgbs: ERROR - unable to set root $control to $value" >&2
+		exit 1
+	fi
+	if [ "$(cat "$path")" != "$value" ]; then
+		echo "tgbs: ERROR - unable to verify root $control=$value" >&2
+		exit 1
+	fi
+done
+
 echo "tgbs: cgroup v2 is ready at $CG_ROOT, cpu, cpuset, memory, and pids enabled at the root"
+echo "tgbs: root server period is 100000 us, reclaim enabled"
 exit 0
