@@ -428,7 +428,7 @@ int cmd_run(int argc, char **argv)
 			break;
 		case OPT_BIND:
 			if (bind_mount_plan_add(&binds, optarg) != 0) {
-				fprintf(stderr, "tgbsctl: ERROR - invalid --bind '%s': use absolute SOURCE:DESTINATION[:ro|rw], a unique destination outside /dev, /proc, /sys and /run, and no '.' or '..' destination components\n", optarg);
+				fprintf(stderr, "tgbsctl: ERROR - invalid --bind '%s': use absolute SOURCE:DESTINATION[:ro|rw], a unique destination outside /dev, /proc, /sys, " RUN_ROOT ", " CHANNEL_ROOT " and /run/lock subtrees, no replacement of / or /run, and no '.' or '..' destination components\n", optarg);
 				bind_mount_plan_close(&binds);
 				return 2;
 			}

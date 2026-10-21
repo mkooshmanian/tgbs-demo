@@ -226,31 +226,38 @@ running. The command returns the shell's exit status. A paused domain must be
 resumed before attaching. If the main process exits, the existing supervisor
 cleans up the domain, including attached shells.
 
-`run --bind SOURCE:DESTINATION[:ro|rw]` shares an existing host directory with
-the container. Both paths must be absolute; the destination directory and its
-parents are created if missing. Repeat `--bind` to share several directories.
+`run --bind SOURCE:DESTINATION[:ro|rw]` shares an existing host file or directory
+with the container. Both paths must be absolute; missing parent directories
+and a destination mountpoint of the appropriate type are created automatically.
+Repeat `--bind` to share several paths.
 For example, `--bind /home/root/toto:/home/root/toto` exposes the directory at
 the same path on both sides, while `--bind /data/shared:/mnt/shared:ro` gives the
 container read-only access at a different path. The default is `rw`, subject
 to the source filesystem's permissions and existing read-only restrictions.
 
+For a single file, `--bind /etc/app.conf:/etc/app.conf:ro` preserves its path
+and makes it read-only inside the container. A file bind retains the original
+inode: if the host replaces the file, restart the container to bind the
+replacement, or share its parent directory so replacements remain visible.
+
 Bind mounts share the original files, independently of the container overlay;
 writes through a writable bind are immediately visible on the host and in
-other containers binding the same source. Only the source directory's mount
+other containers binding the same source. Only the source path's mount
 is cloned, without its submounts. The container bind has private propagation
 and uses `nosuid,nodev`; `ro` affects only that bind, leaving the host mount
 unchanged. Sources are retained as detached mounts before rootfs setup, and
 installed before application privileges are reduced. Destination components
-must not be symlinks or `.`/`..`, destinations must be unique, and `/`, `/dev`,
-`/proc`, `/sys`, `/run` and the latter four subtrees are reserved for runtime
-mounts.
+must not be symlinks or `.`/`..`, and destinations must be unique. `/dev`,
+`/proc`, `/sys`, `/run/tgbs` and `/run/lock` and their subtrees are reserved for
+the runtime; `/` and `/run` themselves cannot be replaced. Other destinations
+under `/run` are allowed.
 
 `run` uses `clone3(CLONE_INTO_CGROUP)` to create the command directly in its
 configured TGBS cgroup and as PID 1 in new PID, mount, UTS, IPC, and cgroup
 namespaces. The static image at `/run/tgbs/rootfs/base` is the lower layer of
 an overlayfs whose writable upper is persistent by default. Startup fails if
 the base is unavailable or writable. Applications see
-a writable root; writes outside explicitly shared bind directories stay in
+a writable root; writes outside explicitly shared bind paths stay in
 their own upper. Mount propagation is private; `/proc`, `/tmp`, and
 `/run` are private mounts, `/sys` is read-only, and `/dev` keeps the host device
 view for prototype compatibility. The cgroup namespace makes the domain appear

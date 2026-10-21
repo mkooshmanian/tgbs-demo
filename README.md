@@ -173,8 +173,8 @@ dedicated ext4 data partition, mounted at `/var/lib/tgbs`, containing all
 persistent uppers. Host and container changes survive reboot and domain exit;
 host changes are not inherited by containers. `/run`, `/tmp` and `/var/volatile`
 remain volatile. `tgbsctl run --ephemeral` selects a private tmpfs upper.
-`tgbsctl run --bind SOURCE:DESTINATION[:ro|rw]` explicitly shares host directories
-with a container, independently of its overlay.
+`tgbsctl run --bind SOURCE:DESTINATION[:ro|rw]` explicitly shares host files or
+directories with a container, independently of its overlay.
 See [the runtime filesystem layout](src/meta-tgbs/README.md#shared-static-root-filesystem).
 
 Persistent uppers are associated with the built base through

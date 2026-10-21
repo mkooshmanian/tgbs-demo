@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: MIT
- * Host directory binds retained across container rootfs preparation.
+ * Host file and directory binds retained across rootfs preparation.
  */
 #define _GNU_SOURCE
 #include "tgbsctl.h"
@@ -46,7 +46,10 @@ static char *parse_destination(char *path)
 	normalized[used] = '\0';
 	if (used == 0 || path_below(normalized, "/dev") ||
 	    path_below(normalized, "/proc") || path_below(normalized, "/sys") ||
-	    path_below(normalized, "/run"))
+	    strcmp(normalized, "/run") == 0 ||
+	    path_below(normalized, "/run/lock") ||
+	    path_below(normalized, RUN_ROOT) || path_below(RUN_ROOT, normalized) ||
+	    path_below(normalized, CHANNEL_ROOT) || path_below(CHANNEL_ROOT, normalized))
 		goto invalid;
 	return strdup(normalized);
 invalid:
@@ -127,17 +130,24 @@ int bind_mount_plan_prepare(struct bind_mount_plan *plan)
 				(entry->read_only ? MOUNT_ATTR_RDONLY : 0),
 			.propagation = MS_PRIVATE,
 		};
-		int source_fd = open(entry->source, O_PATH | O_DIRECTORY | O_CLOEXEC);
+		struct stat st;
+		int source_fd = open(entry->source, O_PATH | O_CLOEXEC);
 		int saved_errno;
 
-		if (source_fd < 0)
+		if (source_fd < 0 || fstat(source_fd, &st) != 0)
 			goto error;
-		/* Clone only this directory's mount, like mount --bind (not --rbind).
+		if (!S_ISDIR(st.st_mode) && !S_ISREG(st.st_mode) && !S_ISSOCK(st.st_mode)) {
+			errno = EINVAL;
+			goto error;
+		}
+		entry->is_directory = S_ISDIR(st.st_mode);
+		/* Clone only this path's mount, like mount --bind (not --rbind).
 		 * The detached mount remains usable after pivot_root hides the host. */
 		entry->mount_fd = (int)syscall(SYS_open_tree, source_fd, "",
 			OPEN_TREE_CLONE | OPEN_TREE_CLOEXEC | AT_EMPTY_PATH);
 		saved_errno = errno;
 		close(source_fd);
+		source_fd = -1;
 		errno = saved_errno;
 		if (entry->mount_fd < 0 ||
 		    syscall(SYS_mount_setattr, entry->mount_fd, "", AT_EMPTY_PATH,
@@ -146,6 +156,8 @@ int bind_mount_plan_prepare(struct bind_mount_plan *plan)
 		continue;
 error:
 		saved_errno = errno;
+		if (source_fd >= 0)
+			close(source_fd);
 		fprintf(stderr, "tgbsctl: ERROR - unable to prepare bind source %s: %s\n",
 			entry->source, strerror(saved_errno));
 		errno = saved_errno;
@@ -154,29 +166,64 @@ error:
 	return 0;
 }
 
+static int prepare_file_destination(int parent_fd, const char *name)
+{
+	struct stat st;
+	int saved_errno;
+	int fd;
+
+	/* Never truncate existing files or open existing targets for I/O. */
+	fd = openat(parent_fd, name,
+		O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0644);
+	if (fd >= 0)
+		close(fd);
+	else if (errno != EEXIST)
+		return -1;
+	fd = openat(parent_fd, name, O_PATH | O_NOFOLLOW | O_CLOEXEC);
+	if (fd < 0)
+		return -1;
+	if (fstat(fd, &st) != 0)
+		goto error;
+	if (!S_ISREG(st.st_mode) && !S_ISSOCK(st.st_mode)) {
+		errno = S_ISDIR(st.st_mode) ? EISDIR : EINVAL;
+		goto error;
+	}
+	return fd;
+error:
+	saved_errno = errno;
+	close(fd);
+	errno = saved_errno;
+	return -1;
+}
+
 /* Resolve every component inside the container after pivot_root. Refusing
  * symlinks also prevents a persistent upper from redirecting a mount target. */
-static int prepare_destination(const char *destination)
+static int prepare_destination(const char *destination, int is_directory)
 {
 	char path[PATH_MAX];
-	char *part, *save;
+	char *part, *next_part, *save;
 	int fd = open("/", O_PATH | O_DIRECTORY | O_CLOEXEC);
 
 	if (fd < 0)
 		return -1;
 	strcpy(path, destination);
 	for (part = strtok_r(path, "/", &save); part != NULL;
-	     part = strtok_r(NULL, "/", &save)) {
+	     part = next_part) {
 		int next;
 		int saved_errno;
 
-		if (mkdirat(fd, part, 0755) != 0 && errno != EEXIST) {
-			saved_errno = errno;
-			close(fd);
-			errno = saved_errno;
-			return -1;
+		next_part = strtok_r(NULL, "/", &save);
+		if (next_part == NULL && !is_directory) {
+			next = prepare_file_destination(fd, part);
+		} else {
+			if (mkdirat(fd, part, 0755) != 0 && errno != EEXIST) {
+				saved_errno = errno;
+				close(fd);
+				errno = saved_errno;
+				return -1;
+			}
+			next = openat(fd, part, O_PATH | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
 		}
-		next = openat(fd, part, O_PATH | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
 		saved_errno = errno;
 		close(fd);
 		if (next < 0) {
@@ -192,7 +239,7 @@ int bind_mount_plan_mount(const struct bind_mount_plan *plan)
 {
 	for (size_t i = 0; i < plan->count; i++) {
 		const struct bind_mount_entry *entry = &plan->entries[i];
-		int target_fd = prepare_destination(entry->destination);
+		int target_fd = prepare_destination(entry->destination, entry->is_directory);
 		int result = -1;
 		int saved_errno;
 

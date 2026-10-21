@@ -46,6 +46,7 @@ struct bind_mount_entry {
 	char *source;
 	char *destination;
 	int read_only;
+	int is_directory;
 	int mount_fd;
 };
 
