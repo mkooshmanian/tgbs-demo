@@ -8,7 +8,7 @@ LIC_FILES_CHKSUM = "file://COPYING;md5=6bc538ed5bd9a7fc9398086aedcd7e46"
 inherit kernel
 
 LINUX_VERSION = "6.18"
-TGBS_VERSION = "1.6"
+TGBS_VERSION = "1.7"
 
 PV = "${LINUX_VERSION}+tgbs${TGBS_VERSION}"
 
@@ -23,7 +23,7 @@ SRC_URI += "${@bb.utils.contains('DISTRO_FEATURES', 'preempt-rt', \
     '', d)}"
 
 SRC_URI[kernel.sha256sum] = "9106a4605da9e31ff17659d958782b815f9591ab308d03b0ee21aad6c7dced4b"
-SRC_URI[tgbs.sha256sum] = "aa3c01af5147c88fd24b697cd30c6154ec2f27eaca4d1d974a681e4679d0847c"
+SRC_URI[tgbs.sha256sum] = "fcf96ce944f4bec96544197b2201f012a5be406c95196960f7e2d0dce6c84b1b"
 SRC_URI[preempt-rt.sha256sum] = "df2a7c6a03eb7795a6cf73645c4e0461017222d22318fed38f34edfcc1842043"
 
 S = "${WORKDIR}/linux-${LINUX_VERSION}"
