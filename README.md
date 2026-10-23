@@ -136,7 +136,7 @@ partitions keep their original sizes. The partition layout is defined in
 
 ## Release bundles
 
-After building both targets and publishing a version tag on `origin`, run:
+After building both targets and creating a local version tag, run:
 
 ```sh
 ./tools/do-release.sh
@@ -146,7 +146,7 @@ The script checks the required Yocto artifacts and creates two folders and
 their `.tar.gz` archives under `build/release/`, named
 `tgbs-demo-qemu-<version>` and `tgbs-demo-zybo-z7-<version>`. Each archive
 contains the image files, helper scripts, and a short launch README. The
-script uses the highest published numeric version tag (for example `v1.0`)
+script uses the highest local numeric version tag (for example `v1.0`)
 and does not start a build. It stops if bundles for that version already
 exist.
 

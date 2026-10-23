@@ -31,12 +31,12 @@ for file in \
     check_file "$file"
 done
 
-# Query origin so an unpublished local tag cannot become a release version.
-if ! REMOTE_TAGS="$(git -C "$PROJECT_DIR" ls-remote --tags --refs origin 'refs/tags/v*')"; then
-    error "cannot list published tags on origin"
+# Use local tags, including version tags that have not been published.
+if ! LOCAL_TAGS="$(git -C "$PROJECT_DIR" tag --list 'v*')"; then
+    error "cannot list local tags"
 fi
-VERSION="$(printf '%s\n' "$REMOTE_TAGS" | sed -nE 's/^[[:xdigit:]]+[[:space:]]+refs\/tags\/(v[0-9]+(\.[0-9]+)*)$/\1/p' | sort -V | tail -n 1)"
-[[ -n "$VERSION" ]] || error "origin has no published version tag (expected v1.0, v1.1, ...)"
+VERSION="$(printf '%s\n' "$LOCAL_TAGS" | sed -nE '/^v[0-9]+(\.[0-9]+)*$/p' | sort -V | tail -n 1)"
+[[ -n "$VERSION" ]] || error "no local version tag (expected v1.0, v1.1, ...)"
 
 QEMU_NAME="tgbs-demo-qemu-$VERSION"
 ZYBO_NAME="tgbs-demo-zybo-z7-$VERSION"
