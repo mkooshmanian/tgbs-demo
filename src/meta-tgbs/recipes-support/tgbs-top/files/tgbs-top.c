@@ -29,7 +29,7 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "cpu-runtime.h"
+#include <tgbs/domain.h>
 
 #ifndef PATH_MAX
 #define PATH_MAX 4096
@@ -152,59 +152,6 @@ static int read_text(const char *path, char *out, size_t out_size)
 	while (length > 0 && isspace((unsigned char)out[length - 1]))
 		out[--length] = '\0';
 	return 0;
-}
-
-static int read_u64(const char *path, unsigned long long *value)
-{
-	char text[64];
-	char *end;
-
-	if (read_text(path, text, sizeof(text)) != 0)
-		return -1;
-	errno = 0;
-	*value = strtoull(text, &end, 10);
-	if (errno != 0 || end == text)
-		return -1;
-	while (isspace((unsigned char)*end))
-		end++;
-	return *end == '\0' ? 0 : -1;
-}
-
-static int read_keyed_u64(const char *path, const char *key,
-		unsigned long long *value)
-{
-	FILE *stream;
-	char line[256];
-	char found_key[128];
-	unsigned long long found_value;
-
-	stream = fopen(path, "r");
-	if (stream == NULL)
-		return -1;
-	while (fgets(line, sizeof(line), stream) != NULL) {
-		if (sscanf(line, "%127s %llu", found_key, &found_value) == 2 &&
-		    strcmp(found_key, key) == 0) {
-			fclose(stream);
-			*value = found_value;
-			return 0;
-		}
-	}
-	fclose(stream);
-	return -1;
-}
-
-static bool valid_domain_name(const char *name)
-{
-	size_t length = strlen(name);
-
-	if (length == 0 || length >= NAME_SIZE)
-		return false;
-	for (size_t i = 0; i < length; i++) {
-		unsigned char c = (unsigned char)name[i];
-		if (!isalnum(c) && c != '_' && c != '.' && c != '-')
-			return false;
-	}
-	return true;
 }
 
 static unsigned int count_cpu_list(const char *list)
@@ -419,99 +366,38 @@ static void read_task(struct snapshot *snapshot, struct domain_sample *domain,
 		strcpy(task->comm, "?");
 	read_task_runtime(tid, task);
 	read_task_switches(tid, &task->switches);
-	strncpy(task->domain, domain->name, sizeof(task->domain) - 1);
+	snprintf(task->domain, sizeof(task->domain), "%s", domain->name);
 	snapshot->task_count++;
 	domain->task_count++;
 }
 
-static void read_domain_tasks(struct snapshot *snapshot,
-		struct domain_sample *domain, const char *path)
-{
-	FILE *stream = fopen(path, "r");
-	long tid;
-
-	if (stream == NULL)
-		return;
-	while (fscanf(stream, "%ld", &tid) == 1) {
-		if (tid > 0 && tid <= INT_MAX)
-			read_task(snapshot, domain, (pid_t)tid);
-	}
-	fclose(stream);
-}
-
-static void read_domain_state(const char *path, char *state, size_t state_size)
-{
-	unsigned long long populated = 0;
-	unsigned long long frozen = 0;
-
-	if (read_keyed_u64(path, "populated", &populated) != 0) {
-		strncpy(state, "unknown", state_size);
-		return;
-	}
-	read_keyed_u64(path, "frozen", &frozen);
-	strncpy(state, frozen ? "paused" : populated ? "running" : "empty",
-		state_size);
-}
-
-static void read_domain(struct snapshot *snapshot, const char *name)
-{
-	struct domain_sample *domain;
-	char path[PATH_MAX];
-	struct stat status;
-	struct runtime_config runtime;
-	struct cpu_list effective;
-	int runtime_status;
-	int period_status;
-
-	if (snapshot->domain_count >= MAX_DOMAINS || !valid_domain_name(name))
-		return;
-	if (path_printf(path, sizeof(path), "%s/%s", cgroup_root, name) != 0 ||
-	    stat(path, &status) != 0 || !S_ISDIR(status.st_mode))
-		return;
-	domain = &snapshot->domains[snapshot->domain_count];
-	memset(domain, 0, sizeof(*domain));
-	strncpy(domain->name, name, sizeof(domain->name) - 1);
-
-	path_printf(path, sizeof(path), "%s/%s/cpu.stat", cgroup_root, name);
-	read_keyed_u64(path, "usage_usec", &domain->usage_usec);
-	path_printf(path, sizeof(path), "%s/%s/cpu.runtime_us", cgroup_root, name);
-	runtime_status = read_runtime(path, &runtime);
-	path_printf(path, sizeof(path), "%s/%s/cpu.period_us", cgroup_root, name);
-	period_status = read_u64(path, &domain->period_usec);
-	path_printf(path, sizeof(path), "%s/%s/cpuset.cpus.effective", cgroup_root, name);
-	if (read_text(path, domain->cpus, sizeof(domain->cpus)) != 0)
-		strcpy(domain->cpus, "-");
-	if (runtime_status == 0 && period_status == 0 && domain->period_usec != 0 &&
-	    parse_cpu_list(domain->cpus, &effective) == 0) {
-		domain->budget_percent = (double)(100.0L * total_runtime(&runtime,
-			&effective) / domain->period_usec);
-		domain->budget_valid = true;
-		free_cpu_list(&effective);
-	}
-	free_runtime(&runtime);
-	path_printf(path, sizeof(path), "%s/%s/cgroup.events", cgroup_root, name);
-	read_domain_state(path, domain->state, sizeof(domain->state));
-	path_printf(path, sizeof(path), "%s/%s/cgroup.threads", cgroup_root, name);
-	read_domain_tasks(snapshot, domain, path);
-	snapshot->domain_count++;
-}
-
 static void take_snapshot(struct snapshot *snapshot)
 {
-	DIR *directory;
-	struct dirent *entry;
-
-	memset(snapshot, 0, sizeof(*snapshot));
-	clock_gettime(CLOCK_MONOTONIC, &snapshot->taken);
-	read_cpus(snapshot);
-	directory = opendir(run_root);
-	if (directory == NULL)
-		return;
-	while ((entry = readdir(directory)) != NULL) {
-		if (entry->d_name[0] != '.')
-			read_domain(snapshot, entry->d_name);
-	}
-	closedir(directory);
+    tgbs_domain_info_t **domains;
+    size_t count;
+    memset(snapshot, 0, sizeof(*snapshot));
+    clock_gettime(CLOCK_MONOTONIC, &snapshot->taken);
+    read_cpus(snapshot);
+    if (tgbs_domain_list_at(cgroup_root, run_root, &domains, &count) != 0) {
+        fprintf(stderr, "tgbs-top: unable to read domains: %s\n", strerror(errno));
+        return;
+    }
+    for (size_t i = 0; i < count && snapshot->domain_count < MAX_DOMAINS; i++) {
+        const tgbs_domain_info_t *info = domains[i];
+        struct domain_sample *domain = &snapshot->domains[snapshot->domain_count++];
+        snprintf(domain->name, sizeof(domain->name), "%s", info->name);
+        snprintf(domain->state, sizeof(domain->state), "%s", tgbs_domain_state_name(info->state));
+        snprintf(domain->cpus, sizeof(domain->cpus), "%.*s", (int)sizeof(domain->cpus) - 1,
+                 info->available & TGBS_INFO_CPUS ? info->cpus : "-");
+        domain->usage_usec = info->usage_us;
+        domain->period_usec = info->period_us;
+        unsigned int required = TGBS_INFO_CONTRACT | TGBS_INFO_CPUS;
+        domain->budget_valid = (info->available & required) == required;
+        domain->budget_percent = info->total_budget_percent;
+        for (size_t j = 0; j < info->thread_count; j++)
+            read_task(snapshot, domain, info->threads[j]);
+    }
+    tgbs_domain_list_free(domains, count);
 }
 
 static const struct domain_sample *previous_domain(const struct snapshot *snapshot,

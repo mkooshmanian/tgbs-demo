@@ -1,0 +1,10 @@
+prefix=/usr
+exec_prefix=${prefix}
+libdir=${exec_prefix}/lib
+includedir=${prefix}/include
+
+Name: tgbs
+Description: Daemonless TGBS container and channel management
+Version: 0.1.0
+Libs: -L${libdir} -ltgbs
+Cflags: -I${includedir}

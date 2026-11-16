@@ -3,7 +3,7 @@ DESCRIPTION = "libtgbscomm provides separate queuing and sampling channel APIs w
 LICENSE = "MIT"
 LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda2f7b4f302"
 
-FILESEXTRAPATHS:prepend := "${THISDIR}/../channel-common/files:"
+FILESEXTRAPATHS:prepend := "${THISDIR}/../libtgbs/files:"
 
 SRC_URI = "file://queuing.c file://queuing.h file://sampling.c file://sampling.h file://types.h file://comm-internal.c file://comm-internal.h file://channel-contract.c file://channel-contract.h file://queuing-format.h file://sampling-format.h file://tgbscomm.pc"
 

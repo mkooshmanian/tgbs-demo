@@ -1,26 +1,18 @@
 SUMMARY = "Interactive CPU monitor for TGBS domains"
-DESCRIPTION = "A small top-like monitor focused on tgbsctl-managed cgroups, their CPU reservations, and the tasks running inside them."
-
+DESCRIPTION = "Displays TGBS domain and task activity using libtgbs observation snapshots."
 LICENSE = "MIT"
 LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda2f7b4f302"
 
-FILESEXTRAPATHS:prepend := "${THISDIR}/../runtime-common/files:"
-
-SRC_URI = "file://tgbs-top.c file://cpu-runtime.c file://cpu-runtime.h"
-
+SRC_URI = "file://tgbs-top.c"
 S = "${WORKDIR}"
-
-RDEPENDS:${PN} += "tgbsctl"
-
-CFLAGS += "-Wall -Wextra"
+DEPENDS = "libtgbs"
+CFLAGS:append = " -Wall -Wextra"
 
 do_compile() {
-    ${CC} ${CFLAGS} ${LDFLAGS} -o ${B}/tgbs-top ${WORKDIR}/tgbs-top.c ${WORKDIR}/cpu-runtime.c
+    ${CC} ${CFLAGS} ${LDFLAGS} tgbs-top.c -o tgbs-top -ltgbs
 }
 
 do_install() {
     install -d ${D}${bindir}
-    install -m 0755 ${B}/tgbs-top ${D}${bindir}/tgbs-top
+    install -m 0755 tgbs-top ${D}${bindir}
 }
-
-FILES:${PN} += "${bindir}/tgbs-top"

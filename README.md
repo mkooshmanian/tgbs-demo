@@ -20,7 +20,7 @@ The generated image includes the following commands:
 
 | Command | Purpose |
 | --- | --- |
-| `tgbsctl` | Create, inspect, update, freeze, and stop TGBS-managed cgroups. |
+| `tgbsctl` | Create, inspect, update, freeze, and stop TGBS-managed cgroups through `libtgbs`. |
 | `tgbs-demo-comm` | Run two TGBS domains exchanging messages over two unidirectional channels. |
 | `tgbs-demo-doom` | Run Doom inside the `doom` domain with a configurable temporal CPU contract. |
 | `tgbs-demo-mixed` | Run the JSON-configured `mixed` domain containing FIFO RT tasks and FAIR background tasks. |
@@ -64,6 +64,17 @@ The kas configuration is split by responsibility:
 * `kas/qemu.yml` — QEMU target configuration
 * `kas/zybo-z7.yml` — Zybo Z7 target configuration
 * `kas/local.yml` — local build host configuration
+
+The container engine is available as `libtgbs`, with C headers
+`<tgbs/domain.h>` and `<tgbs/channel.h>` and pkg-config
+module `tgbs`. `tgbs_domain_run()` blocks while supervising the container,
+retains its storage lock, and cleans up before returning. Initialize launch
+settings with `TGBS_DOMAIN_SPEC_INIT`; functions return `0` on success or `-1`
+with `errno` on failure, while the command's exit status is returned separately.
+The runtime does not install signal handlers. Launch/exec currently require a
+single-threaded calling process. `tgbsctl` and `tgbs-top` use this library;
+`libtgbscomm` retains its separate channel I/O API. All five components keep
+their own recipes under `src/meta-tgbs/recipes-support`.
 
 The Yocto layers are organized as follows:
 
