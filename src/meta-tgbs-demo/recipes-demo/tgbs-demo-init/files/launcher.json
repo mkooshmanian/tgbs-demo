@@ -1,0 +1,79 @@
+{
+    "version": 1,
+    "domains": [
+        {
+            "name": "doom",
+            "entrypoint": "/usr/libexec/tgbs-demo/doom-entrypoint",
+            "runtime_us": 65000,
+            "period_us": 100000,
+            "cpus": "1",
+            "reclaim": false,
+            "memory_max": "max",
+            "pids_max": "max"
+        },
+        {
+            "name": "mixed",
+            "entrypoint": "/usr/libexec/tgbs-demo/mixed-entrypoint",
+            "args": ["/etc/tgbs-demo/mixed/default.json"],
+            "runtime_us": 6000,
+            "period_us": 20000,
+            "cpus": "1",
+            "memory_max": "max",
+            "pids_max": "max"
+        },
+        {
+            "name": "comm-a",
+            "entrypoint": "/usr/libexec/tgbs-demo/comm-node",
+            "args": ["initiator", "comm-a", "comm-b-to-a", "comm-a-to-b", "comm-c-to-ab"],
+            "runtime_us": 10000,
+            "period_us": 100000,
+            "cpus": "0",
+            "memory_max": "max",
+            "pids_max": "max"
+        },
+        {
+            "name": "comm-b",
+            "entrypoint": "/usr/libexec/tgbs-demo/comm-node",
+            "args": ["responder", "comm-b", "comm-a-to-b", "comm-b-to-a", "comm-c-to-ab"],
+            "runtime_us": 10000,
+            "period_us": 100000,
+            "cpus": "0",
+            "memory_max": "max",
+            "pids_max": "max"
+        },
+        {
+            "name": "comm-c",
+            "entrypoint": "/usr/libexec/tgbs-demo/comm-node",
+            "args": ["publisher", "comm-c", "comm-c-to-ab"],
+            "runtime_us": 10000,
+            "period_us": 100000,
+            "cpus": "0",
+            "memory_max": "max",
+            "pids_max": "max"
+        }
+    ],
+    "channels": [
+        {
+            "name": "comm-a-to-b",
+            "type": "queuing",
+            "source": "comm-a",
+            "destinations": ["comm-b"],
+            "max_message_size": 128
+        },
+        {
+            "name": "comm-b-to-a",
+            "type": "queuing",
+            "source": "comm-b",
+            "destinations": ["comm-a"],
+            "max_message_size": 128
+        },
+        {
+            "name": "comm-c-to-ab",
+            "type": "sampling",
+            "source": "comm-c",
+            "destinations": ["comm-a", "comm-b"],
+            "max_message_size": 128,
+            "refresh_period_us": 2000000
+        }
+    ]
+}

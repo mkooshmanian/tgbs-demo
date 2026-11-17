@@ -213,12 +213,13 @@ The host directory `/home/root/shared` is shared at `/mnt/shared` in the
 container. You can create or edit shared files manually; they remain available
 on the host after exit.
 
-After booting the target, start the example domains from a control shell.
-The commands launch their domains in the background:
+At boot, the `tgbs-demo` init service calls `tgbs-launcher` with
+`/etc/tgbs-demo/launcher.json`. It starts `doom`, `mixed`, `comm-a`, `comm-b`,
+and `comm-c` in the background. The interactive `self` domain remains manual.
+To restart the configured demonstration:
 
 ```sh
-tgbs-demo-doom
-tgbs-demo-mixed
+/etc/init.d/tgbs-demo restart
 ```
 
 Open two additional SSH sessions for the live monitors:
@@ -232,9 +233,9 @@ tgbs-demo-mixed-timeline
 ```
 
 The default configuration places both workloads on CPU 1. Doom reserves 65%
-of one CPU, while the mixed workload reserves 30%. The remaining CPU is left
-available to the base system and the control tools. Run the system summary at
-any time with:
+of one CPU, while the mixed workload reserves 30%. The three communication
+domains each reserve 10% of CPU 0, leaving its remaining bandwidth available
+to the base system and control tools. Run the system summary at any time with:
 
 ```sh
 tgbs-fetch
@@ -244,15 +245,15 @@ To view Doom, connect a VNC client to `localhost:5900` for QEMU or to
 `192.168.10.2:5900` for the default Zybo Z7 configuration. The VNC endpoint
 has no password and is intended only for the isolated demonstration network.
 
-Start the bidirectional communication example and follow both domain logs with:
+The communication domains also start automatically. Follow their queuing and
+sampling exchanges, workload output and runtime diagnostics with:
 
 ```sh
-tgbs-demo-comm
-tail -f /var/log/tgbs-demo/comm-a.log /var/log/tgbs-demo/comm-b.log
+tail -f /var/log/tgbs-demo/launcher.log
 ```
 
-This creates `comm-a-to-b` and `comm-b-to-a`, then starts one domain at
-each end. `tgbs-demo-comm logs` is a shortcut for the `tail -f` command.
+The configuration creates two queuing channels (`comm-a-to-b`, `comm-b-to-a`)
+and the sampling channel `comm-c-to-ab`, published by `comm-c` for both peers.
 
 The contracts can be changed while the workloads are running. For example:
 
@@ -273,6 +274,13 @@ tgbs-demo-mixed resume
 ```
 
 Stop the workloads with:
+
+```sh
+/etc/init.d/tgbs-demo stop
+```
+
+The service waits for domain cleanup, then deletes the configured channels.
+The existing commands can also stop individual demonstrations:
 
 ```sh
 tgbs-demo-doom stop
