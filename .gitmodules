@@ -6,3 +6,6 @@
 	path = src/meta-openembedded
 	url = https://git.openembedded.org/meta-openembedded
 	branch = scarthgap
+[submodule "src/meta-tgbs"]
+	path = src/meta-tgbs
+	url = ../meta-tgbs.git

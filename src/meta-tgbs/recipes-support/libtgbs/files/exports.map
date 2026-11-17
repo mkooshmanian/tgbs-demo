@@ -1,6 +1,0 @@
-{
-    global:
-        tgbs_domain_*;
-        tgbs_channel_*;
-    local: *;
-};
