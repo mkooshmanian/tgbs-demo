@@ -38,6 +38,11 @@ retains a non-recursive read-only bind of the static image at
 kept by SysV. Neither the shared base nor the data store contains the temporary
 staging mounts after the pivot.
 
+The machine configurations select the pre-init in the QEMU kernel command line
+and the Zybo U-Boot extlinux configuration, and set the default overlay partition
+size. These settings are independent of the demo distribution. Images for these
+machines should inherit `tgbs-rootfs` to install the pre-init and identify the base.
+
 ```text
 /run/tgbs/rootfs/base/              read-only shared base
 /var/lib/tgbs/                     writable ext4 data partition
