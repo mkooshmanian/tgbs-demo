@@ -246,11 +246,14 @@ To view Doom, connect a VNC client to `localhost:5900` for QEMU or to
 has no password and is intended only for the isolated demonstration network.
 
 The communication domains also start automatically. Follow their queuing and
-sampling exchanges, workload output and runtime diagnostics with:
+sampling exchanges and related errors with:
 
 ```sh
-tail -f /var/log/tgbs-demo/launcher.log
+tgbs-demo-comm logs
 ```
+
+This follows communication messages from the existing per-node logs and
+`/var/log/tgbs-demo/launcher.log`, covering both manual and automatic startup.
 
 The configuration creates two queuing channels (`comm-a-to-b`, `comm-b-to-a`)
 and the sampling channel `comm-c-to-ab`, published by `comm-c` for both peers.

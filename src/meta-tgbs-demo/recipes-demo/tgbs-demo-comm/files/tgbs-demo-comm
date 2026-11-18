@@ -13,6 +13,7 @@ LOG_DIR="/var/log/tgbs-demo"
 LOG_A="${LOG_DIR}/comm-a.log"
 LOG_B="${LOG_DIR}/comm-b.log"
 LOG_C="${LOG_DIR}/comm-c.log"
+LOG_LAUNCHER="${LOG_DIR}/launcher.log"
 
 RUNTIME_US=10000
 PERIOD_US=100000
@@ -30,10 +31,11 @@ Usage:
 
 With no arguments, runs 'start'.
 
-Logs:
+Logs (existing files, communication messages only):
   ${LOG_A}
   ${LOG_B}
   ${LOG_C}
+  ${LOG_LAUNCHER}
 EOF
 }
 
@@ -143,7 +145,7 @@ start()
 
     echo "TGBS communication demo started in the background."
     echo "Follow the exchanges with:"
-    echo "  tail -f ${LOG_A} ${LOG_B} ${LOG_C}"
+    echo "  tgbs-demo-comm logs"
 }
 
 stop()
@@ -167,6 +169,33 @@ stop()
     delete_channel "${CHANNEL_B_TO_A}"
     delete_channel "${CHANNEL_C_TO_AB}"
     echo "TGBS communication demo stopped."
+}
+
+logs()
+{
+    set --
+    for log in "${LOG_A}" "${LOG_B}" "${LOG_C}" "${LOG_LAUNCHER}"; do
+        if [ -f "${log}" ] && [ -r "${log}" ]; then
+            set -- "$@" "${log}"
+        fi
+    done
+    if [ "$#" -eq 0 ]; then
+        echo "tgbs-demo-comm: no readable logs in ${LOG_DIR}" >&2
+        return 1
+    fi
+
+    # A shell read loop prints each matching line immediately on BusyBox too.
+    tail -f "$@" | while IFS= read -r line; do
+        case "${line}" in
+            "${DOMAIN_A}:"*|"${DOMAIN_B}:"*|"${DOMAIN_C}:"*|\
+            "tgbs-launcher: "*"${DOMAIN_A}"*|\
+            "tgbs-launcher: "*"${DOMAIN_B}"*|\
+            "tgbs-launcher: "*"${DOMAIN_C}"*|\
+            "comm-node:"*|"tgbsctl:"*)
+                printf '%s\n' "${line}"
+                ;;
+        esac
+    done
 }
 
 if [ "$#" -eq 0 ]; then
@@ -193,9 +222,7 @@ case "${1:-}" in
             usage
             exit 1
         }
-        mkdir -p "${LOG_DIR}"
-        touch "${LOG_A}" "${LOG_B}" "${LOG_C}"
-        exec tail -f "${LOG_A}" "${LOG_B}" "${LOG_C}"
+        logs
         ;;
     help|-h|--help)
         usage
