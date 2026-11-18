@@ -35,8 +35,8 @@ done
 if ! LOCAL_TAGS="$(git -C "$PROJECT_DIR" tag --list 'v*')"; then
     error "cannot list local tags"
 fi
-VERSION="$(printf '%s\n' "$LOCAL_TAGS" | sed -nE '/^v[0-9]+(\.[0-9]+)*$/p' | sort -V | tail -n 1)"
-[[ -n "$VERSION" ]] || error "no local version tag (expected v1.0, v1.1, ...)"
+VERSION="$(printf '%s\n' "$LOCAL_TAGS" | sed -nE '/^v[0-9]+(\.[0-9]+)*(-rc[0-9]+)?$/p' | sort -V | tail -n 1)"
+[[ -n "$VERSION" ]] || error "no local version tag (expected v1.0, v1.0-rc0, v1.1, ...)"
 
 QEMU_NAME="tgbs-demo-qemu-$VERSION"
 ZYBO_NAME="tgbs-demo-zybo-z7-$VERSION"
